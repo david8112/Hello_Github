@@ -98,9 +98,9 @@ def main() -> None:
         c = z["pred_close"].astype(float)
         fut = pd.DatetimeIndex(z["fut_ts"])
         pc = float(z["prev_close"])
-        anchor = pd.Timestamp(z["anchor"]) if "anchor" in z else fut[0] - pd.Timedelta(minutes=STEP_MIN[scale])
-        made = pd.Timestamp(z["made_at"]) if "made_at" in z else pd.Timestamp(Path(f).stat().st_mtime, unit="s")
-        precision = str(z["precision"]) if "precision" in z else ("fp32" if code == "BTCUSDT" else "bf16")
+        anchor = pd.Timestamp(z["anchor"][()]) if "anchor" in z else fut[0] - pd.Timedelta(minutes=STEP_MIN[scale])
+        made = pd.Timestamp(z["made_at"][()]) if "made_at" in z else pd.Timestamp(Path(f).stat().st_mtime, unit="s")
+        precision = str(z["precision"][()]) if "precision" in z else ("fp32" if code == "BTCUSDT" else "bf16")
         q = np.quantile(c, [.05, .25, .5, .75, .95], axis=0)
         asset = ASSETS[code]
         bands.append(dict(asset=asset, scale=scale, key=f"{asset}-{scale}", step=0, t=bj(anchor),
