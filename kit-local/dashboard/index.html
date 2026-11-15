@@ -53,6 +53,10 @@
   .fx-panel > * { flex-shrink: 0; }
   .fx-panel.is-full { border-radius: 0; }
   .fx-panel.is-full .fx-chart { touch-action: none; }
+  .fx-rot-wrap { position: relative; }
+  .fx-rot-wrap.is-rotating { overflow: hidden; }
+  .fx-panel.is-rotated { position: absolute; top: 0; left: 0; transform-origin: top left; overflow: hidden; box-sizing: border-box; padding: 12px; gap: 8px; }
+  .fx-panel.is-rotated #chart-zoom-hint, .fx-panel.is-rotated #legend, .fx-panel.is-rotated #pos-note, .fx-panel.is-rotated #chart-tip { display: none; }
   .fx-panel:fullscreen { background: var(--color-bg); overflow: auto; padding: max(12px, env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) max(12px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px)); }
   .fx details summary { cursor: pointer; font-weight: var(--cds-font-weight-medium); }
   .fx details ul { margin: var(--cds-gap-sm) 0 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; line-height: 1.55; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
@@ -101,6 +105,7 @@
     </div>
   </section>
 
+  <div class="fx-rot-wrap" id="chart-wrap">
   <section class="fx-panel" id="chart-panel">
     <div class="fx-chart-head" id="chart-head">
       <h2 id="chart-title" data-draw="chart-title">—</h2>
@@ -122,6 +127,7 @@
     <p class="fx-muted" id="pos-note" data-draw="pos-note">—</p>
     <p class="fx-muted" id="chart-tip">点按或拖动图表，查看每根 K 线的实际价格和预测区间。浅色 K 线是预测起点之前的历史。</p>
   </section>
+  </div>
 
   <section class="fx-panel" id="tracking-panel">
     <h2 id="tracking-title">全部预测的跟踪</h2>
@@ -430,29 +436,61 @@
 </script>
 
 <script>
-  // 全屏按钮：只切换 class / hidden，并请求系统全屏（不支持时退回到「撑满屏幕高度」）
+  // 全屏按钮：进入全屏并尽量切到横屏。
+  // 安卓等支持的浏览器：系统全屏 + 锁定横屏；iPhone 不允许网页旋转屏幕，就把图表面板旋转 90° 横向铺满屏幕。
+  // 这里只切换 class / hidden / style。
   (() => {
-    const panels = document.querySelectorAll('#chart-panel');
-    if (!panels.length) return;
-    const panel = panels[0];
+    const panel = document.getElementById('chart-panel');
+    const wrap = document.getElementById('chart-wrap');
+    if (!panel || !wrap) return;
+    let realLandscape = false;
+    const fsEl = () => document.fullscreenElement || document.webkitFullscreenElement || null;
+    const layout = () => {
+      const full = panel.classList.contains('is-full');
+      const rotate = full && fsEl() !== panel && !realLandscape && window.innerHeight > window.innerWidth;
+      wrap.classList.toggle('is-rotating', rotate);
+      panel.classList.toggle('is-rotated', rotate);
+      if (rotate) {
+        const w = wrap.clientWidth;
+        const h = Math.max(320, Math.round(window.innerHeight - 8));
+        wrap.style.height = `${h}px`;
+        panel.style.width = `${h}px`;
+        panel.style.height = `${w}px`;
+        panel.style.transform = `translateX(${w}px) rotate(90deg)`;
+      } else {
+        wrap.style.height = ''; panel.style.width = ''; panel.style.height = ''; panel.style.transform = '';
+      }
+    };
     const set = (on) => {
       panel.classList.toggle('is-full', on);
       document.querySelectorAll('#chart-expand').forEach((b) => { b.hidden = on; });
       document.querySelectorAll('#chart-collapse, #chart-reset, #chart-zoom-hint').forEach((b) => { b.hidden = !on; });
+      if (!on) realLandscape = false;
+      layout();
       window.fx.zoomResetAt = Date.now();
       dash.draw('chart');
-      if (on && panel.scrollIntoView) panel.scrollIntoView({ block: 'start' });
+      if (on && wrap.scrollIntoView) wrap.scrollIntoView({ block: 'start' });
+    };
+    const lockLandscape = () => {
+      try {
+        if (screen.orientation && screen.orientation.lock) {
+          return screen.orientation.lock('landscape').then(() => { realLandscape = true; layout(); dash.draw('chart'); }, () => {});
+        }
+      } catch (e) { /* 不支持锁定方向 */ }
+      return null;
     };
     document.querySelectorAll('#chart-expand').forEach((b) => b.addEventListener('click', () => {
       set(true);
       const req = panel.requestFullscreen || panel.webkitRequestFullscreen;
-      if (req) {
-        try { const p = req.call(panel); if (p && p.catch) p.catch(() => {}); } catch (e) { /* 不支持系统全屏 */ }
-      }
+      if (!req) return;
+      try {
+        const p = req.call(panel);
+        if (p && p.then) p.then(() => { layout(); lockLandscape(); dash.draw('chart'); }, () => {});
+      } catch (e) { /* 不支持系统全屏：用旋转的面板 */ }
     }));
     document.querySelectorAll('#chart-collapse').forEach((b) => b.addEventListener('click', () => {
-      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
-      if (fsEl === panel) {
+      try { if (screen.orientation && screen.orientation.unlock) screen.orientation.unlock(); } catch (e) { /* ignore */ }
+      if (fsEl() === panel) {
         const ex = document.exitFullscreen || document.webkitExitFullscreen;
         try { const p = ex.call(document); if (p && p.catch) p.catch(() => {}); } catch (e) { /* ignore */ }
       }
@@ -462,12 +500,17 @@
       window.fx.zoomResetAt = Date.now();
       dash.draw('chart');
     }));
+    let wasFs = false;
     const onFs = () => {
-      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
-      if (!fsEl && panel.classList.contains('is-full')) set(false); else dash.draw('chart');
+      if (fsEl() === panel) { wasFs = true; layout(); dash.draw('chart'); return; }
+      if (wasFs) { wasFs = false; if (panel.classList.contains('is-full')) set(false); return; }
+      layout(); dash.draw('chart');
     };
     document.addEventListener('fullscreenchange', onFs);
     document.addEventListener('webkitfullscreenchange', onFs);
+    const onResize = () => { if (panel.classList.contains('is-full')) { layout(); dash.draw('chart'); } };
+    window.addEventListener('resize', onResize);
+    window.addEventListener('orientationchange', onResize);
   })();
 </script>
 
@@ -504,11 +547,13 @@
       const W = Math.max(280, el.clientWidth || 320);
       let H = W < 520 ? 320 : 400;
       if (full) {
-        // 全屏：图表高度 = 屏幕高度 - 标题和按钮 - 提示 - 边距
+        // 全屏：图表高度 = 可用高度 - 标题和按钮 - 提示 - 边距；旋转横屏时可用高度是面板（旋转前）的高度
+        const rotated = panel.classList.contains('is-rotated');
         const head = panel.querySelector('#chart-head');
         const hint = panel.querySelector('#chart-zoom-hint');
-        const reserve = (head ? head.offsetHeight : 50) + (hint && !hint.hidden ? hint.offsetHeight : 0) + 48;
-        H = Math.max(260, Math.round((window.innerHeight || 700) - reserve));
+        const avail = rotated ? panel.clientHeight : (window.innerHeight || 700);
+        const reserve = (head ? head.offsetHeight : 50) + (!rotated && hint && !hint.hidden ? hint.offsetHeight : 0) + (rotated ? 36 : 48);
+        H = Math.max(rotated ? 200 : 260, Math.round(avail - reserve));
       }
       svg.attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
       if (!bands.length) {
@@ -675,7 +720,12 @@
         tip.style('left', `${Math.max(0, left)}px`).style('top', `${M.top}px`);
       };
       overlay.on('pointermove', show).on('pointerdown', show)
-        .on('pointerleave', () => { if (cursor) cursor.style('opacity', 0); tip.attr('hidden', ''); });
+        .on('pointerleave', (event) => {
+          // 触屏抬起手指时也会触发 pointerleave，只在鼠标移出时隐藏，手指点按后提示框保留到下一次点按
+          if (event.pointerType !== 'mouse') return;
+          if (cursor) cursor.style('opacity', 0);
+          tip.attr('hidden', '');
+        });
 
       // 全屏时：双指 / 滚轮缩放，拖动平移（只缩放时间轴）
       if (full) {
