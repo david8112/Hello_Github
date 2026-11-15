@@ -64,12 +64,15 @@ def main() -> None:
     model.to(device).eval()
     Lc, Lh = cfg.data.window_for(scale)
 
-    i0 = max(int(ts.searchsorted(pd.Timestamp(args.start), side="left")), Lc)   # 第一个锚点 = 收盘时间 >= start 的第一根
-    last = len(ts) if args.end is None else int(ts.searchsorted(pd.Timestamp(args.end), side="right"))
+    start = pd.Timestamp(args.start) - (F.DISPLAY_OFFSET if market == "crypto" else pd.Timedelta(0))   # 北京时间 -> 内部时间
+    i0 = max(int(ts.searchsorted(start, side="left")), Lc)   # 第一个锚点 = 收盘时间 >= start 的第一根
+    end_ts = None if args.end is None else pd.Timestamp(args.end) - (F.DISPLAY_OFFSET if market == "crypto" else pd.Timedelta(0))
+    last = len(ts) if end_ts is None else int(ts.searchsorted(end_ts, side="right"))
     idx = list(range(i0, last - Lh, Lh))           # 锚点 = 第 i 根（含），之后要有 Lh 根真实数据
     if not idx:
         raise SystemExit("区间内没有完整的检验窗口")
-    print(f"{code} {scale} ({market}): {len(idx)} 个不重叠窗口，锚点 {ts[idx[0]]} .. {ts[idx[-1]]}，"
+    print(f"{code} {scale} ({market}): {len(idx)} 个不重叠窗口，锚点 {F.to_display(ts[idx[0]], market)} .. "
+          f"{F.to_display(ts[idx[-1]], market)}{F.tz_note(market)}，"
           f"每个窗口预测 {Lh} 根，K={args.paths}, steps={args.steps}, device={device}, precision={precision}", flush=True)
 
     rows = []
@@ -93,11 +96,15 @@ def main() -> None:
             prev_vol=float(np.std(prev_lr, ddof=1)), prev_ret=float(np.log(prev[-1] / prev[0])),
             seconds=round(r["seconds"], 1)))
         x = rows[-1]
-        print(f"[{j + 1}/{len(idx)}] 锚点 {x['anchor']}  预测中位 {F.pct(x['pred_median'])} "
+        print(f"[{j + 1}/{len(idx)}] 锚点 {F.to_display(x['anchor'], market)}  预测中位 {F.pct(x['pred_median'])} "
               f"[{F.pct(x['q05'])}, {F.pct(x['q95'])}]  P(涨)={x['p_up']:.0%}  实际 {F.pct(x['actual'])}  "
               f"逐根覆盖 {x['bar_coverage']:.0%}  {x['seconds']:.0f}s", flush=True)
 
     t = pd.DataFrame(rows)
+    if market == "crypto":                                           # 第一列显示北京时间，另存 UTC
+        t.insert(0, "anchor_utc8", F.to_display(t["anchor"], market))
+        t = t.rename(columns={"anchor": "anchor_utc"})
+        t["anchor"] = t["anchor_utc"]
     hit = np.sign(t["pred_median"]) == np.sign(t["actual"])
     up_rate = float((t["actual"] > 0).mean())
     mom_hit = np.sign(t["prev_ret"]) == np.sign(t["actual"])
@@ -114,9 +121,10 @@ def main() -> None:
         "spearman_vol_prev_window": spearman(t["prev_vol"], t["real_vol"]),
         "mean_pred_vol": float(t["pred_vol"].mean()), "mean_real_vol": float(t["real_vol"].mean()),
     }
-    tag = f"backtest_{code}_{scale}_{t['anchor'].iloc[0]:%Y%m%d}_{t['anchor'].iloc[-1]:%Y%m%d}_{precision}"
+    a0, a1 = F.to_display(t["anchor"].iloc[0], market), F.to_display(t["anchor"].iloc[-1], market)
+    tag = f"backtest_{code}_{scale}_{a0:%Y%m%d}_{a1:%Y%m%d}_{precision}"
     args.out.mkdir(parents=True, exist_ok=True)
-    t.to_csv(args.out / f"{tag}.csv", index=False)
+    t.drop(columns=["anchor"] if "anchor_utc" in t else []).to_csv(args.out / f"{tag}.csv", index=False)
     pd.Series(summary).to_json(args.out / f"{tag}_summary.json", indent=2, force_ascii=False)
 
     print("\n===== 汇总 =====")
@@ -138,9 +146,9 @@ def main() -> None:
     ax.scatter(x, e(t["pred_median"]) * 100, color="#e8743b", marker="_", s=300, lw=2, label="pred median")
     ax.scatter(x, e(t["actual"]) * 100, color="#1f4e79", zorder=3, s=28, label="actual")
     ax.axhline(0, color="k", lw=0.8)
-    lab = [(a - pd.Timedelta(1, "ns")).strftime("%m-%d") if (market == "crypto" and scale == "1d") else a.strftime("%m-%d")
-           for a in t["anchor"]]
-    ax.set_xticks(x, lab, fontsize=8)
+    lab = [F.to_display(a, market).strftime("%m-%d %H:%M" if market == "crypto" else "%m-%d") for a in t["anchor"]]
+    ax.set_xticks(x, lab, fontsize=7)
+    ax.set_xlabel("forecast start (last bar close" + (f", {F.DISPLAY_TZ})" if market == "crypto" else ")"), fontsize=8)
     ax.set_ylabel(f"return over next {Lh} bars (%)")
     ax.set_title(f"KiT out-of-sample {code} {scale}: direction hit {summary['direction_hit_KiT']:.0%} "
                  f"(always-up {up_rate:.0%}), end-in-band {summary['end_in_5_95_rate']:.0%}, "

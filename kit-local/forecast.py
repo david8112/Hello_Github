@@ -15,7 +15,8 @@
   #       也认 akshare 的中文列名 日期/时间, 开盘, 最高, 最低, 收盘, 成交量）
   python forecast.py --file my_600519_1d.csv --code 600519.SH --scale 1d
 
-  # 加密货币：先用 fetch_crypto.py 下载（币安或 OKX）（时间戳 = K 线收盘时间，UTC）
+  # 加密货币：先用 fetch_crypto.py 下载（币安或 OKX）。数据文件里是 UTC 收盘时间（模型训练约定），
+  #          打印、图表和结果 CSV 一律显示北京时间（UTC+8）；--anchor 也按北京时间填写
   python fetch_crypto.py --symbol BTCUSDT --interval 1d          # 或 --exchange okx
   python forecast.py --market crypto --code BTCUSDT --scale 1d --file data_crypto/BTCUSDT_1d.csv
 
@@ -62,6 +63,9 @@ from kit_v1.infer import (denormalize_paths, flow_sample,  # noqa: E402
 MARKETS = ("ashare", "crypto")
 SCALES = ("1m", "5m", "15m", "30m", "1h", "2h", "1d")
 DEFAULT_CKPT = KIT_ROOT / "ckpt" / "step_market_284M" / "step_market_284M.pt"
+# 显示用的时区：数据和模型输入一律保持 UTC（训练约定），只有打印、图表、结果 CSV 换成北京时间
+DISPLAY_OFFSET = pd.Timedelta(hours=8)
+DISPLAY_TZ = "UTC+8"
 COLUMN_ALIASES = {
     "datetime": "datetime", "date": "datetime", "time": "datetime", "timestamp": "datetime",
     "日期": "datetime", "时间": "datetime", "日期时间": "datetime",
@@ -71,6 +75,15 @@ COLUMN_ALIASES = {
     "close": "close", "收盘": "close", "收盘价": "close",
     "volume": "volume", "vol": "volume", "成交量": "volume",
 }
+
+
+def to_display(ts, market: str):
+    """内部时间 -> 显示时间。加密货币内部是 UTC，显示为 UTC+8；A 股数据本来就是北京时间，不变。"""
+    return ts + DISPLAY_OFFSET if market == "crypto" else ts
+
+
+def tz_note(market: str) -> str:
+    return f"（北京时间 {DISPLAY_TZ}）" if market == "crypto" else ""
 
 
 def pct(log_ret) -> str:
@@ -142,13 +155,20 @@ def build_calendar(market: str, data_root: Path, extra_path: Path | None, hist_t
 
 
 def anchor_end(text: str | None, market: str, ts: pd.DatetimeIndex) -> pd.Timestamp:
-    """锚点 -> 截止时间（含）。只写日期 = 当天收盘：A 股当天 23:59:59，加密货币次日 00:00。"""
+    """锚点（北京时间）-> 内部截止时间（含）。
+
+    A 股：只写日期 = 当天收盘（当天 23:59:59 之前的最后一根）。
+    加密货币：按北京时间填写，内部换算成 UTC；只写日期 = 北京时间当天 24:00 之前已收盘的最后一根
+    （日线的话就是当天 08:00 收盘的那根，即 UTC 前一天的日线）。
+    """
     if not text:
         return ts[-1]
     a = pd.Timestamp(text)
-    if a == a.normalize() and len(text.strip()) <= 10:
-        return a + (pd.Timedelta(days=1) if market == "crypto" else pd.Timedelta(hours=23, minutes=59, seconds=59))
-    return a
+    date_only = a == a.normalize() and len(text.strip()) <= 10
+    if market == "crypto":
+        a = a - DISPLAY_OFFSET
+        return a + pd.Timedelta(days=1) if date_only else a
+    return a + pd.Timedelta(hours=23, minutes=59, seconds=59) if date_only else a
 
 
 def load_bundle(ckpt: Path, data_root: Path, seed: int = 0):
@@ -219,10 +239,10 @@ def forecast_window(model, cfg, df: pd.DataFrame, end: pd.Timestamp, *, code: st
 
 
 def bar_label(ts: pd.Timestamp, scale: str, market: str) -> str:
-    """图上的时间标签。加密货币日线显示 K 线所属的那一天（收盘时间减 1 纳秒）。"""
-    if scale == "1d":
-        return (ts - pd.Timedelta(1, "ns") if market == "crypto" else ts).strftime("%Y-%m-%d")
-    return ts.strftime("%m-%d %H:%M")
+    """图上的时间标签（K 线收盘时间）。加密货币显示北京时间：UTC 日线在北京时间 08:00 收盘。"""
+    if market == "crypto":
+        return to_display(ts, market).strftime("%Y-%m-%d %H:%M" if scale == "1d" else "%m-%d %H:%M")
+    return ts.strftime("%Y-%m-%d" if scale == "1d" else "%m-%d %H:%M")
 
 
 def plot_result(res: dict, png: Path, ctx_show: int = 80) -> None:
@@ -258,8 +278,8 @@ def plot_result(res: dict, png: Path, ctx_show: int = 80) -> None:
     ax.set_xlim(-1, nc + Lh)
     ax.grid(alpha=0.25)
     ax.legend(loc="upper left", fontsize=8)
-    tz = " UTC" if res["market"] == "crypto" else ""
-    ax.set_title(f"KiT {res['code']} {res['scale']}  last bar closes {res['anchor']}{tz}  next {Lh} bars: "
+    tz = f" ({DISPLAY_TZ})" if res["market"] == "crypto" else ""
+    ax.set_title(f"KiT {res['code']} {res['scale']}  last bar closes {to_display(res['anchor'], res['market']):%Y-%m-%d %H:%M}{tz}  next {Lh} bars: "
                  f"median {pct(np.median(term))}  [5% {pct(np.quantile(term, .05))}, 95% {pct(np.quantile(term, .95))}]  "
                  f"P(up)={(term > 0).mean():.0%}  K={len(term)}", fontsize=10)
     fig.savefig(png, dpi=130, bbox_inches="tight")
@@ -279,7 +299,8 @@ def main() -> None:
     ap.add_argument("--file", type=Path, default=None,
                     help="OHLCV 文件（CSV/parquet）；A 股不填则读 KiT/data/ashare/<scale>/<code>.parquet 示例数据")
     ap.add_argument("--open-time", action="store_true", help="文件里的时间戳是 K 线开盘时间（自动换成收盘时间）")
-    ap.add_argument("--anchor", default=None, help="从哪根 K 线之后开始预测；默认用文件最后一根。只写日期 = 当天收盘")
+    ap.add_argument("--anchor", default=None,
+                    help="从哪根 K 线之后开始预测（北京时间）；默认用文件最后一根。只写日期 = 当天收盘")
     ap.add_argument("--ckpt", type=Path, default=DEFAULT_CKPT)
     ap.add_argument("--data-root", type=Path, default=KIT_ROOT / "data", help="A 股的 trade_dates.csv 所在目录")
     ap.add_argument("--calendar", type=Path, default=None,
@@ -311,7 +332,7 @@ def main() -> None:
     model.to(device).eval()
 
     Lc, Lh = cfg.data.window_for(scale)
-    print(f"{code} {scale} ({market}): 预测锚点 {end} 之后 {Lh} 根  device={device} precision={precision} K={args.paths}",
+    print(f"{code} {scale} ({market}): 预测锚点 {to_display(end, market)}{tz_note(market)}之后 {Lh} 根  device={device} precision={precision} K={args.paths}",
           flush=True)
     res = forecast_window(model, cfg, df, end, code=code, scale=scale, market=market, instruments=instruments,
                           stats=stats, tdays=tdays, paths=args.paths, steps=args.steps, seed=args.seed,
@@ -321,20 +342,21 @@ def main() -> None:
         print(f"[warn] 预测区间延伸到 {fut_ts[-1].date()}，超出交易日历（截至 {pd.Timestamp(tdays[-1]).date()}）："
               f"这部分只跳过周末、不跳节假日。可用 --calendar 提供最新交易日历")
 
-    tz = " UTC" if market == "crypto" else ""
-    print(f"  历史截至 {res['anchor']}{tz}，预测 {fut_ts[0]} .. {fut_ts[-1]}{tz}（{Lh} 根，K 线收盘时间）")
+    print(f"  历史截至 {to_display(res['anchor'], market)}，预测 {to_display(fut_ts[0], market)} .. "
+          f"{to_display(fut_ts[-1], market)}{tz_note(market)}，共 {Lh} 根（时间均为 K 线收盘时间）")
     print(f"  最后收盘 {prev_close:g}；{Lh} 根后收盘的预测（{args.paths} 条路径）:")
     print(f"    中位数 {pct(np.median(term))}  均值 {pct(term.mean())}  "
           f"5%-95% 区间 [{pct(np.quantile(term, .05))}, {pct(np.quantile(term, .95))}]  "
           f"上涨路径占比 {(term > 0).mean():.0%}   用时 {res['seconds']:.0f}s")
 
-    tag = f"{code}_{scale}_{res['anchor'].strftime('%Y%m%d_%H%M')}"
+    tag = f"{code}_{scale}_{to_display(res['anchor'], market):%Y%m%d_%H%M}"
     args.out.mkdir(parents=True, exist_ok=True)
-    table = pd.DataFrame({"datetime": fut_ts, "close_q05": q[0], "close_q25": q[1], "close_q50": q[2],
+    table = pd.DataFrame({"datetime": to_display(fut_ts, market), "close_q05": q[0], "close_q25": q[1], "close_q50": q[2],
                           "close_q75": q[3], "close_q95": q[4],
                           **{f"rep_{k}": pred[k][res['k_rep']] for k in ("open", "high", "low", "close", "volume")}})
-    if market == "crypto" and scale == "1d":
-        table.insert(1, "bar_day", (fut_ts - pd.Timedelta(1, "ns")).strftime("%Y-%m-%d"))
+    if market == "crypto":
+        table = table.rename(columns={"datetime": "close_time_utc8"})
+        table.insert(1, "close_time_utc", fut_ts)
     fut_real = res["fut_real"]
     if len(fut_real):
         n = len(fut_real)

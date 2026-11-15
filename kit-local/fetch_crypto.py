@@ -7,8 +7,9 @@
 
 - 币安: https://data-api.binance.vision（只读行情镜像）；OKX: https://www.okx.com/api/v5/market/history-candles
   都不需要账号和密钥。
-- datetime 列是 K 线「收盘时间」，UTC，无时区标记。这是 KiT 的约定：
-  例如 2026-11-14 那根日线记为 2026-11-15 00:00，1h 线 09:00-10:00 那根记为 10:00
+- 文件里的 datetime 列是 K 线「收盘时间」，UTC，无时区标记。这是 KiT 训练数据的约定，不要改：
+  例如 UTC 2026-11-14 那根日线记为 2026-11-15 00:00（= 北京时间 11-15 08:00 收盘）
+- 屏幕提示、forecast.py / backtest.py 的输出一律显示北京时间（UTC+8）
 - OKX 的日线用 1Dutc（按 UTC 切日）；OKX 默认的 1D 是按香港时间切日，和模型的训练数据不一致
 - 只保留已经收盘的 K 线，正在走的那根会被丢掉
 - 默认下载量 = 模型需要的历史长度 + 成交量 EMA 预热，日线至少 1000 根
@@ -125,8 +126,9 @@ def main() -> None:
     path = args.out or Path(__file__).resolve().parent / "data_crypto" / f"{code}_{args.interval}{suffix}.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(path, index=False)
-    print(f"{args.exchange} {code} {args.interval}: {len(out)} 根，{out['datetime'].iloc[0]} .. {out['datetime'].iloc[-1]}"
-          f"（收盘时间 UTC），最新收盘价 {out['close'].iloc[-1]:g} -> {path}")
+    bj = out["datetime"] + pd.Timedelta(hours=8)
+    print(f"{args.exchange} {code} {args.interval}: {len(out)} 根，{bj.iloc[0]} .. {bj.iloc[-1]}"
+          f"（收盘时间，北京时间 UTC+8；文件内按 UTC 保存），最新收盘价 {out['close'].iloc[-1]:g} -> {path}")
 
 
 if __name__ == "__main__":
