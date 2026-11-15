@@ -368,7 +368,10 @@ def main() -> None:
     table.to_csv(args.out / f"{tag}.csv", index=False)
     np.savez_compressed(args.out / f"{tag}.npz", **{f"pred_{k}": v.astype(np.float32) for k, v in pred.items()},
                         fut_ts=fut_ts.to_numpy(dtype="datetime64[ns]"), prev_close=np.float64(prev_close),
-                        k_rep=res["k_rep"])
+                        k_rep=res["k_rep"], anchor=np.datetime64(res["anchor"], "ns"),
+                        code=code, scale=scale, market=market, paths=args.paths, steps=args.steps,
+                        precision=precision, ckpt=args.ckpt.name,
+                        made_at=np.datetime64(pd.Timestamp.now(tz="UTC").tz_localize(None), "ns"))
     if not args.no_plot:
         plot_result(res, args.out / f"{tag}.png", args.ctx_show)
     print(f"  输出: {args.out / tag}.{{png,csv,npz}}")
