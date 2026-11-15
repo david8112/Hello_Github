@@ -6,7 +6,7 @@
 输出（时间一律是北京时间 UTC+8，K 线收盘时间，格式 "YYYY-MM-DD HH:MM"）:
   dashboard/forecasts.json  预测区间：每根未来 K 线收盘价的 5/25/50/75/95% 分位（第一行是起点收盘价）
   dashboard/summary.json    每个预测一行：生成时间、起止时间、起点收盘价、终点涨跌幅分位、上涨路径占比
-  dashboard/actuals.json    实际 K 线（币安现货，含正在走的那根，live=1）
+  dashboard/actuals.json    实际 K 线（OKX 永续合约 BTC-USDT-SWAP / SOL-USDT-SWAP，含正在走的那根，live=1）
   dashboard/backtest.json   日线样本外回测（有结果文件时才写）
 每个文件是 {"rows": [...], "meta": [...]}，meta 里带本脚本源码，方便核对数字怎么来的。
 """
@@ -26,6 +26,8 @@ HERE = Path(__file__).resolve().parent
 OUT = HERE / "outputs"
 DST = HERE / "dashboard"
 ASSETS = {"BTCUSDT": "BTC", "SOLUSDT": "SOL"}
+OKX_INST = {"BTCUSDT": "BTC-USDT-SWAP", "SOLUSDT": "SOL-USDT-SWAP"}     # 和你在 OKX 交易的永续合约一致
+OKX_BAR = {"15m": "15m", "1h": "1H", "2h": "2H", "1d": "1Dutc"}          # 日线按 UTC 切分（北京时间 08:00 收盘）
 SCALES = ("15m", "1h", "2h", "1d")
 STEP_MIN = {"15m": 15, "1h": 60, "2h": 120, "1d": 1440}
 HIST_BARS = {"15m": 96, "1h": 72, "2h": 60, "1d": 90}      # 预测起点之前画多少根历史 K 线
@@ -50,16 +52,25 @@ def get_json(url: str):
             time.sleep(2 ** attempt)
 
 
-def binance_klines(symbol: str, interval: str, start_ms: int) -> list:
-    """从 start_ms 起的全部 K 线（含正在走的那根）。"""
-    rows, cur = [], start_ms
+def okx_klines(code: str, scale: str, start_ms: int) -> list[dict]:
+    """OKX 永续合约从 start_ms（开盘时间）起到现在的 K 线，含正在走的那根（confirm=0）。从新到旧翻页，每页 100 根。"""
+    out, after = {}, None
     while True:
-        q = urllib.parse.urlencode(dict(symbol=symbol, interval=interval, startTime=cur, limit=1000))
-        batch = get_json(f"https://data-api.binance.vision/api/v3/klines?{q}")
-        rows += batch
-        if len(batch) < 1000:
-            return rows
-        cur = int(batch[-1][0]) + 1
+        q = dict(instId=OKX_INST[code], bar=OKX_BAR[scale], limit=100)
+        if after is not None:
+            q["after"] = after
+        js = get_json(f"https://www.okx.com/api/v5/market/history-candles?{urllib.parse.urlencode(q)}")
+        if js.get("code") != "0":
+            raise RuntimeError(f"OKX 返回错误 {js.get('code')} {js.get('msg')}")
+        batch = js.get("data") or []
+        for k in batch:
+            out[int(k[0])] = dict(open_ms=int(k[0]), open=float(k[1]), high=float(k[2]), low=float(k[3]),
+                                  close=float(k[4]), live=int(k[8] == "0"))
+        if not batch or int(batch[-1][0]) <= start_ms:
+            break
+        after = int(batch[-1][0])
+        time.sleep(0.12)
+    return [out[t] for t in sorted(out) if t >= start_ms]
 
 
 def latest_forecasts() -> dict:
@@ -108,12 +119,10 @@ def main() -> None:
         # 实际 K 线：预测起点前 HIST_BARS 根，到现在
         step = pd.Timedelta(minutes=STEP_MIN[scale])
         start = anchor - step * (HIST_BARS[scale])          # 第一根的开盘时间
-        ks = binance_klines(code, scale, int(start.value // 10**6))
-        for k in ks:
-            close_t = pd.Timestamp(int(k[0]), unit="ms") + step
+        for k in okx_klines(code, scale, int(start.value // 10**6)):
+            close_t = pd.Timestamp(k["open_ms"], unit="ms") + step
             actuals.append(dict(asset=asset, scale=scale, key=f"{asset}-{scale}", t=bj(close_t),
-                                open=float(k[1]), high=float(k[2]), low=float(k[3]), close=float(k[4]),
-                                live=int(int(k[6]) >= now.value // 10**6)))
+                                open=k["open"], high=k["high"], low=k["low"], close=k["close"], live=k["live"]))
         time.sleep(0.2)
 
     def dump(name, rows, extra=()):
@@ -124,7 +133,7 @@ def main() -> None:
     model = {"label": "模型", "value": "KiT step_market_284M（训练截止 2025-12-31），每个预测采样 16-32 条路径，32 步欧拉积分"}
     dump("forecasts.json", bands, [model, {"label": "输入", "value": "outputs/*.npz（forecast.py 的输出）"}])
     dump("summary.json", summary, [model])
-    dump("actuals.json", actuals, [{"label": "输入", "value": "币安现货公开行情 data-api.binance.vision/api/v3/klines"}])
+    dump("actuals.json", actuals, [{"label": "输入", "value": "OKX 永续合约公开行情 www.okx.com/api/v5/market/history-candles（BTC-USDT-SWAP、SOL-USDT-SWAP）"}])
 
     bt = sorted(glob.glob(str(OUT / "backtest_BTCUSDT_1d_*_bf16.csv")))
     if bt:

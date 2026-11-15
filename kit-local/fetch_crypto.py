@@ -3,6 +3,7 @@
 
   python fetch_crypto.py --symbol BTCUSDT --interval 1d                  # 币安（默认）
   python fetch_crypto.py --exchange okx --symbol BTCUSDT --interval 1h   # OKX
+  python fetch_crypto.py --exchange okx --swap --symbol SOLUSDT --interval 15m   # OKX 永续合约 SOL-USDT-SWAP
   python fetch_crypto.py --symbol ETHUSDT --interval 2h --bars 3000
 
 - 币安: https://data-api.binance.vision（只读行情镜像）；OKX: https://www.okx.com/api/v5/market/history-candles
@@ -68,19 +69,23 @@ def fetch_binance(symbol: str, interval: str, n: int, now_ms: int) -> list[tuple
     return rows
 
 
-def okx_inst(symbol: str) -> str:
-    s = symbol.upper()
-    if "-" in s:
-        return s
-    for qt in QUOTES:
-        if s.endswith(qt) and len(s) > len(qt):
-            return f"{s[:-len(qt)]}-{qt}"
-    raise SystemExit(f"无法把 {symbol} 转成 OKX 的 instId（例如 BTC-USDT）")
+def okx_inst(symbol: str, swap: bool = False) -> str:
+    s = symbol.upper().replace("-SWAP", "")
+    if "-" not in s:
+        for qt in QUOTES:
+            if s.endswith(qt) and len(s) > len(qt):
+                s = f"{s[:-len(qt)]}-{qt}"
+                break
+        else:
+            raise SystemExit(f"无法把 {symbol} 转成 OKX 的 instId（例如 BTC-USDT）")
+    return f"{s}-SWAP" if swap else s
 
 
-def fetch_okx(symbol: str, interval: str, n: int, now_ms: int) -> list[tuple]:
-    """OKX history-candles 每次最多 100 根、从新到旧翻页；confirm=1 表示已收盘。"""
-    inst, bar = okx_inst(symbol), OKX_BAR[interval]
+def fetch_okx(symbol: str, interval: str, n: int, now_ms: int, swap: bool = False) -> list[tuple]:
+    """OKX history-candles 每次最多 100 根、从新到旧翻页；confirm=1 表示已收盘。
+    成交量：现货用 vol（币数量）；永续合约用 volCcy（币数量），不用张数。"""
+    inst, bar = okx_inst(symbol, swap), OKX_BAR[interval]
+    vi = 6 if swap else 5
     rows, after = [], now_ms
     while len(rows) < n:
         q = urllib.parse.urlencode(dict(instId=inst, bar=bar, after=after, limit=100))
@@ -90,7 +95,7 @@ def fetch_okx(symbol: str, interval: str, n: int, now_ms: int) -> list[tuple]:
         batch = js.get("data") or []
         if not batch:
             break
-        rows += [(int(k[0]), *map(float, k[1:6])) for k in batch if k[8] == "1"]
+        rows += [(int(k[0]), *map(float, k[1:5]), float(k[vi])) for k in batch if k[8] == "1"]
         after = int(batch[-1][0])
         time.sleep(0.12)                              # 限频 20 次 / 2 秒
     return rows
@@ -101,6 +106,7 @@ def main() -> None:
     ap.add_argument("--exchange", default="binance", choices=("binance", "okx"))
     ap.add_argument("--symbol", default="BTCUSDT", help="如 BTCUSDT（OKX 也可写 BTC-USDT）")
     ap.add_argument("--interval", default="1d", choices=list(STEP_MIN))
+    ap.add_argument("--swap", action="store_true", help="OKX 永续合约（如 SOL-USDT-SWAP），默认现货")
     ap.add_argument("--bars", type=int, default=None, help="下载多少根（默认按模型需要自动计算）")
     ap.add_argument("--out", type=Path, default=None, help="默认 data_crypto/<SYMBOL>_<interval>[_okx].csv")
     args = ap.parse_args()
@@ -108,7 +114,10 @@ def main() -> None:
     sym = args.symbol.upper().replace("-", "") if args.exchange == "binance" else args.symbol.upper()
     n = args.bars or default_bars(args.interval)
     now_ms = int(time.time() * 1000)
-    rows = (fetch_binance if args.exchange == "binance" else fetch_okx)(sym, args.interval, n, now_ms)
+    if args.swap and args.exchange != "okx":
+        raise SystemExit("--swap 目前只支持 --exchange okx")
+    rows = (fetch_okx(sym, args.interval, n, now_ms, swap=args.swap) if args.exchange == "okx"
+            else fetch_binance(sym, args.interval, n, now_ms))
     if not rows:
         raise SystemExit(f"没有取到 {args.exchange} {sym} {args.interval} 的数据（交易对名称对吗？）")
     step_ms = STEP_MIN[args.interval] * 60_000
@@ -121,8 +130,8 @@ def main() -> None:
     if gaps:
         print(f"[warn] 数据里有 {gaps} 处时间不连续（交易所停机或缺数据）")
 
-    code = sym.replace("-", "")
-    suffix = "" if args.exchange == "binance" else f"_{args.exchange}"
+    code = sym.replace("-SWAP", "").replace("-", "")
+    suffix = "" if args.exchange == "binance" else f"_{args.exchange}" + ("_swap" if args.swap else "")
     path = args.out or Path(__file__).resolve().parent / "data_crypto" / f"{code}_{args.interval}{suffix}.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     out.to_csv(path, index=False)

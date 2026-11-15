@@ -66,7 +66,7 @@
   <header class="fx-head" id="top">
     <h1 id="title">BTC·SOL 行情预测</h1>
     <p class="fx-lede" id="lede" data-draw="lede">—</p>
-    <p class="fx-muted" id="time-note">时间均为北京时间（UTC+8）的 K 线收盘时间。现价来自 Crypto.com，页面打开时每 5 秒刷新；K 线来自币安，<span data-draw="updated" data-source="actuals">—</span> 更新；预测由 KiT 开源 K 线模型生成。</p>
+    <p class="fx-muted" id="time-note">时间均为北京时间（UTC+8）的 K 线收盘时间。K 线来自 OKX 永续合约（和 OKX App 一致），<span data-draw="updated" data-source="actuals">—</span> 更新；现价来自 Crypto.com 现货，页面打开时每 5 秒刷新，和 OKX 合约价通常相差不到 0.1%；预测由 KiT 开源 K 线模型生成。</p>
   </header>
 
   <div class="fx-controls" id="controls">
@@ -156,7 +156,7 @@
         <li>「在预测分布中的位置」：现价在这根 K 线收盘价预测分布里的分位。50% 表示正好在中位数，低于 5% 或高于 95% 就是跑出了预测区间。</li>
         <li>短周期（15 分钟、1 小时、2 小时）的预测还没有在 BTC、SOL 上做过回测。日线在 2026 年样本外的前几个窗口里方向判断并不可靠，2 月那波 −20% 的下跌没有预测到。</li>
         <li>模型生成的 K 线影线比真实的长，所以「最高价 / 最低价碰到某个价位」的概率会被高估，看收盘价更可靠。</li>
-        <li>模型训练用的是 UTC 切日的日线，日线在北京时间 08:00 收盘。实际行情来自币安现货，与 OKX 的价格差通常在 0.01% 以内。</li>
+        <li>模型训练用的是 UTC 切日的日线，日线在北京时间 08:00 收盘。K 线和模型输入都用 OKX 永续合约（BTC-USDT-SWAP、SOL-USDT-SWAP）。OKX 没有可用的实时连接器，所以现价用 Crypto.com 现货，与 OKX 合约价通常相差不到 0.1%。</li>
         <li>仅供研究参考，不构成投资建议。</li>
       </ul>
     </details>
@@ -231,7 +231,7 @@
   dash.calc('tracking', {
     inputs: ['summary', 'forecasts', 'actuals', 'live_btc', 'live_sol'],
     title: '预测 vs 实际',
-    description: '每个预测已收盘的 K 线里，实际收盘价与同一时刻预测中位数的偏差和在预测分布中的位置；以及现价（Crypto.com 实时，取不到时用币安每小时数据）与正在形成那根 K 线的预测对比',
+    description: '每个预测已收盘的 K 线里，实际收盘价与同一时刻预测中位数的偏差和在预测分布中的位置；以及现价（Crypto.com 实时，取不到时用 OKX 每小时数据）与正在形成那根 K 线的预测对比',
     fn: (summary, forecasts, actuals, live_btc, live_sol) => {
       const tick = {};
       [['BTC', live_btc], ['SOL', live_sol]].forEach(([asset, rows]) => {
@@ -263,9 +263,9 @@
         const last = done[done.length - 1];
         const fileLive = acts.find((r) => r.live);
         const tk = tick[s.asset];
-        // 现价：有实时报价用实时报价，对比它所在那根（正在形成的）K 线的预测；否则用币安文件里正在形成的那根
+        // 现价：有实时报价用实时报价，对比它所在那根（正在形成的）K 线的预测；否则用 OKX 文件里正在形成的那根
         const liveBar = tk ? { close: tk.last, t: tk.time_bj, src: 'Crypto.com 实时' }
-          : (fileLive ? { close: fileLive.close, t: fileLive.t, src: '币安（每小时更新）' } : null);
+          : (fileLive ? { close: fileLive.close, t: fileLive.t, src: 'OKX（每小时更新）' } : null);
         const liveBand = tk ? bands.find((b) => `${b.t}:00` >= tk.time_bj) || null
           : (fileLive ? bands.find((b) => b.t === fileLive.t) || null : null);
         const lastPos = last ? position(last, byT.get(last.t).close) : null;
