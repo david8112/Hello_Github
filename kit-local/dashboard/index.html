@@ -1,0 +1,587 @@
+<meta name="dash-one-writer">
+<style>
+  .fx { display: flex; flex-direction: column; gap: var(--cds-gap-lg); font-family: var(--font-anthropic-sans); color: var(--color-fg); max-width: 920px; }
+  .fx h1 { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: var(--cds-font-size-title); margin: 0; text-wrap: balance; }
+  .fx h2 { font-size: var(--cds-font-size-heading); font-weight: var(--cds-font-weight-medium); margin: 0; text-wrap: balance; }
+  .fx p { margin: 0; }
+  .fx-lede { font-size: var(--cds-font-size-body); line-height: 1.55; }
+  .fx-muted { color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); line-height: 1.5; }
+  .fx-head { display: flex; flex-direction: column; gap: var(--cds-gap-sm); }
+  .fx-controls { display: flex; flex-wrap: wrap; gap: var(--cds-gap-sm); align-items: center; }
+  .fx-seg { display: inline-flex; border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); overflow: hidden; }
+  .fx-seg button { appearance: none; border: 0; background: transparent; color: var(--color-fg-muted); font: inherit; font-size: var(--cds-font-size-body); padding: 8px 14px; cursor: pointer; min-height: 40px; }
+  .fx-seg button + button { border-left: 1px solid var(--color-border-line); }
+  .fx-seg button.is-on { background: var(--color-panel); color: var(--color-fg); font-weight: var(--cds-font-weight-medium); }
+  .fx-seg button:focus-visible { outline: 2px solid var(--color-fg); outline-offset: -2px; }
+  .fx-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--cds-gap-sm); }
+  @media (min-width: 640px) { .fx-cards { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+  .fx-card { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-md); display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+  .fx-card .fx-label { color: var(--color-fg-muted); font-size: var(--cds-font-size-caption); letter-spacing: .02em; }
+  .fx-big { font-family: var(--font-anthropic-serif); font-weight: 400; font-size: 1.6rem; line-height: 1.15; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+  .fx-small { font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); font-variant-numeric: tabular-nums; line-height: 1.4; }
+  .fx-good { color: var(--color-ok); }
+  .fx-bad { color: var(--color-bad); }
+  .fx-warn { color: var(--color-warn); }
+  .fx-panel { background: var(--color-panel); border: 1px solid var(--color-border-line); border-radius: var(--cds-radius); padding: var(--cds-pad-md); display: flex; flex-direction: column; gap: var(--cds-gap-sm); min-width: 0; }
+  .fx-chart { position: relative; width: 100%; min-height: 300px; touch-action: pan-y; }
+  .fx-chart svg { display: block; width: 100%; overflow: visible; }
+  .fx-chart text { font-family: var(--font-anthropic-sans); }
+  .fx-axis text { fill: var(--cds-text-secondary); font-size: var(--cds-font-size-caption); }
+  .fx-axis path, .fx-axis line { stroke: var(--cds-chart-axis); }
+  .fx-grid line { stroke: var(--cds-chart-grid); }
+  .fx-tip { position: absolute; z-index: 2; pointer-events: none; background: var(--cds-surface-popover); border: 1px solid var(--cds-border); box-shadow: var(--cds-shadow-popover); border-radius: var(--cds-radius); padding: 8px 10px; font-size: var(--cds-font-size-caption); line-height: 1.5; font-variant-numeric: tabular-nums; min-width: 150px; max-width: 220px; }
+  .fx-tip b { font-weight: var(--cds-font-weight-medium); }
+  .fx-tip .fx-tip-muted { color: var(--cds-text-secondary); }
+  .fx-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+  .fx-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .fx-key { display: inline-block; width: 14px; height: 10px; border-radius: 2px; }
+  .fx-key-line { display: inline-block; width: 16px; height: 0; border-top: 2px dashed currentColor; }
+  .fx-table-wrap { overflow-x: auto; }
+  .fx-table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: var(--cds-font-size-caption); }
+  .fx-table th, .fx-table td { text-align: right; padding: 8px 6px; border-bottom: 1px solid var(--color-border-line); white-space: nowrap; }
+  .fx-table th:first-child, .fx-table td:first-child { text-align: left; }
+  .fx-table th { color: var(--color-fg-muted); font-weight: var(--cds-font-weight-medium); }
+  .fx-table tbody tr { cursor: pointer; }
+  .fx-table tbody tr.is-on td { background: var(--color-bg); font-weight: var(--cds-font-weight-medium); }
+  .fx details summary { cursor: pointer; font-weight: var(--cds-font-weight-medium); }
+  .fx details ul { margin: var(--cds-gap-sm) 0 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; line-height: 1.55; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
+</style>
+
+<div class="fx">
+  <header class="fx-head" id="top">
+    <h1 id="title">BTC·SOL 行情预测</h1>
+    <p class="fx-lede" id="lede" data-draw="lede">—</p>
+    <p class="fx-muted" id="time-note">时间均为北京时间（UTC+8）的 K 线收盘时间。现价来自 Crypto.com，页面打开时每 5 秒刷新；K 线来自币安，<span data-draw="updated" data-source="actuals">—</span> 更新；预测由 KiT 开源 K 线模型生成。</p>
+  </header>
+
+  <div class="fx-controls" id="controls">
+    <div class="fx-seg" role="group" aria-label="品种" id="asset-tabs">
+      <button type="button" data-asset="SOL" aria-pressed="false">SOL</button>
+      <button type="button" data-asset="BTC" aria-pressed="false">BTC</button>
+    </div>
+    <div class="fx-seg" role="group" aria-label="周期" id="scale-tabs">
+      <button type="button" data-scale="15m" aria-pressed="false">15分钟</button>
+      <button type="button" data-scale="1h" aria-pressed="false">1小时</button>
+      <button type="button" data-scale="2h" aria-pressed="false">2小时</button>
+      <button type="button" data-scale="1d" aria-pressed="false">日线</button>
+    </div>
+  </div>
+
+  <section class="fx-cards" id="cards" aria-label="关键数字">
+    <div class="fx-card" id="card-price">
+      <span class="fx-label">现价</span>
+      <span class="fx-big" data-draw="c-price" data-source="tracking" data-field="live_price">—</span>
+      <span class="fx-small" data-draw="c-price-sub">—</span>
+    </div>
+    <div class="fx-card" id="card-dev">
+      <span class="fx-label">实际 vs 预测中位数</span>
+      <span class="fx-big" data-draw="c-dev" data-source="tracking" data-field="live_dev">—</span>
+      <span class="fx-small" data-draw="c-dev-sub">—</span>
+    </div>
+    <div class="fx-card" id="card-pos">
+      <span class="fx-label">在预测分布中的位置</span>
+      <span class="fx-big" data-draw="c-pos" data-source="tracking" data-field="live_pct_label">—</span>
+      <span class="fx-small" data-draw="c-pos-sub">—</span>
+    </div>
+    <div class="fx-card" id="card-end">
+      <span class="fx-label">预测终点（中位数）</span>
+      <span class="fx-big" data-draw="c-end" data-source="summary" data-field="med_ret">—</span>
+      <span class="fx-small" data-draw="c-end-sub">—</span>
+    </div>
+  </section>
+
+  <section class="fx-panel" id="chart-panel">
+    <h2 id="chart-title" data-draw="chart-title">—</h2>
+    <div class="fx-chart" id="chart" data-draw="chart" data-source="actuals forecasts live_sol live_btc"></div>
+    <div class="fx-legend" id="legend">
+      <span><i class="fx-key" style="background: var(--color-ok)"></i>阳线（涨）</span>
+      <span><i class="fx-key" style="background: var(--color-bad)"></i>阴线（跌）</span>
+      <span><i class="fx-key" data-draw="legend-band-outer"></i>预测 5–95%</span>
+      <span><i class="fx-key" data-draw="legend-band-inner"></i>预测 25–75%</span>
+      <span><i class="fx-key-line" data-draw="legend-median"></i>预测中位数</span>
+    </div>
+    <p class="fx-muted" id="pos-note" data-draw="pos-note">—</p>
+    <p class="fx-muted" id="chart-tip">点按或拖动图表，查看每根 K 线的实际价格和预测区间。浅色 K 线是预测起点之前的历史。</p>
+  </section>
+
+  <section class="fx-panel" id="tracking-panel">
+    <h2 id="tracking-title">全部预测的跟踪</h2>
+    <p class="fx-muted" id="tracking-note">每行是一次预测：已经收盘的 K 线里，最近一根的实际收盘价与同一时刻预测中位数的偏差，以及已收盘 K 线落在 5–95% 区间内的比例。点一行可切换到对应的图。</p>
+    <div class="fx-table-wrap">
+      <table class="fx-table" id="tracking-table" data-source="tracking" data-row-key="key">
+        <thead>
+          <tr>
+            <th data-field="label">预测</th>
+            <th data-field="progress">已收盘</th>
+            <th data-field="dev">最近偏差</th>
+            <th data-field="pct_label">分位</th>
+            <th data-field="coverage">区间覆盖</th>
+          </tr>
+        </thead>
+        <tbody data-draw="track-rows"></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="fx-panel" id="about">
+    <details id="notes">
+      <summary>这些预测怎么读、能信多少</summary>
+      <ul>
+        <li>KiT 每次采样 16–32 条可能的未来走势。图上的色带是这些走势在每根 K 线收盘时的分布：深色是中间一半（25–75%），浅色是 5–95%。</li>
+        <li>「在预测分布中的位置」：现价在这根 K 线收盘价预测分布里的分位。50% 表示正好在中位数，低于 5% 或高于 95% 就是跑出了预测区间。</li>
+        <li>短周期（15 分钟、1 小时、2 小时）的预测还没有在 BTC、SOL 上做过回测。日线在 2026 年样本外的前几个窗口里方向判断并不可靠，2 月那波 −20% 的下跌没有预测到。</li>
+        <li>模型生成的 K 线影线比真实的长，所以「最高价 / 最低价碰到某个价位」的概率会被高估，看收盘价更可靠。</li>
+        <li>模型训练用的是 UTC 切日的日线，日线在北京时间 08:00 收盘。实际行情来自币安现货，与 OKX 的价格差通常在 0.01% 以内。</li>
+        <li>仅供研究参考，不构成投资建议。</li>
+      </ul>
+    </details>
+  </section>
+</div>
+
+<script>
+  // 共享的工具：选中状态、格式、持仓参考线（持仓是你给的固定参考，不来自数据）
+  window.fx = (() => {
+    const parse = d3.utcParse('%Y-%m-%d %H:%M');
+    const SCALE_LABEL = { '15m': '15分钟', '1h': '1小时', '2h': '2小时', '1d': '日线' };
+    const STEP_MS = { '15m': 9e5, '1h': 36e5, '2h': 72e5, '1d': 864e5 };
+    const POSITION = { SOL: { entry: 70.79, tp: [74.34, 74.79], sl: [67.24, 67.66] } };
+    const sel = () => {
+      const p = dash.params();
+      const asset = p.asset === 'BTC' ? 'BTC' : 'SOL';
+      const scale = SCALE_LABEL[p.scale] ? p.scale : '1h';
+      return { asset, scale, key: `${asset}-${scale}` };
+    };
+    const priceFmt = (asset) => (asset === 'BTC' ? d3.format(',.0f') : d3.format(',.2f'));
+    const pct = d3.format('+.2%');
+    const pct0 = d3.format('.0%');
+    const timeFmt = (scale) => d3.utcFormat(scale === '1d' ? '%m-%d %H:%M' : '%m-%d %H:%M');
+    const rowsOf = (id) => { const d = dash.data(id); return d.status === 'ok' && Array.isArray(d.data) ? d.data : null; };
+    return { parse, SCALE_LABEL, STEP_MS, POSITION, sel, priceFmt, pct, pct0, timeFmt, rowsOf };
+  })();
+</script>
+
+<script>
+  // Crypto.com 实时报价：把一条 ticker 变成一行（价格转成数字，时间换成北京时间）
+  dash.loader('live_sol', {
+    description: '把 Crypto.com 的 SOL_USDT 报价转成一行：最新成交价、买一、卖一、24 小时高低和北京时间',
+    fn: ({ answer }) => {
+      const a = typeof answer === 'string' ? JSON.parse(answer) : answer;
+      if (!a || a.last == null) throw new Error('Crypto.com 没有返回 SOL_USDT 报价');
+      const bj = new Date(new Date(a.timestamp).getTime() + 8 * 3600e3).toISOString().slice(0, 19).replace('T', ' ');
+      return [{ instrument: a.instrument_name, last: Number(a.last), bid: Number(a.best_bid), ask: Number(a.best_ask),
+        high_24h: Number(a.high), low_24h: Number(a.low), change_24h: Number(a.change), time_bj: bj }];
+    },
+  });
+  dash.loader('live_btc', {
+    description: '把 Crypto.com 的 BTC_USDT 报价转成一行：最新成交价、买一、卖一、24 小时高低和北京时间',
+    fn: ({ answer }) => {
+      const a = typeof answer === 'string' ? JSON.parse(answer) : answer;
+      if (!a || a.last == null) throw new Error('Crypto.com 没有返回 BTC_USDT 报价');
+      const bj = new Date(new Date(a.timestamp).getTime() + 8 * 3600e3).toISOString().slice(0, 19).replace('T', ' ');
+      return [{ instrument: a.instrument_name, last: Number(a.last), bid: Number(a.best_bid), ask: Number(a.best_ask),
+        high_24h: Number(a.high), low_24h: Number(a.low), change_24h: Number(a.change), time_bj: bj }];
+    },
+  });
+
+  // 页面在前台时：当前品种每 5 秒刷新一次报价，另一个每 30 秒；上一次还没返回就跳过
+  (() => {
+    const ids = { SOL: 'live_sol', BTC: 'live_btc' };
+    let n = 0;
+    setInterval(() => {
+      if (document.visibilityState !== 'visible') return;
+      n += 1;
+      const cur = window.fx.sel().asset;
+      Object.entries(ids).forEach(([asset, id]) => {
+        const d = dash.data(id);
+        if (d.refreshing || d.status === 'loading' || d.status === 'connect' || d.status === 'declined') return;
+        const every = asset === cur && d.status !== 'error' ? 1 : 6;
+        if (n % every === 0) dash.refresh(id);
+      });
+    }, 5000);
+  })();
+</script>
+
+<script>
+  // 预测 vs 实际：每个预测一行
+  dash.calc('tracking', {
+    inputs: ['summary', 'forecasts', 'actuals', 'live_btc', 'live_sol'],
+    title: '预测 vs 实际',
+    description: '每个预测已收盘的 K 线里，实际收盘价与同一时刻预测中位数的偏差和在预测分布中的位置；以及现价（Crypto.com 实时，取不到时用币安每小时数据）与正在形成那根 K 线的预测对比',
+    fn: (summary, forecasts, actuals, live_btc, live_sol) => {
+      const tick = {};
+      [['BTC', live_btc], ['SOL', live_sol]].forEach(([asset, rows]) => {
+        const r = Array.isArray(rows) ? rows[0] : null;
+        if (r && Number.isFinite(r.last) && r.time_bj) tick[asset] = r;
+      });
+      const LABEL = { '15m': '15分钟', '1h': '1小时', '2h': '2小时', '1d': '日线' };
+      const position = (b, x) => {
+        const q = [b.q05, b.q25, b.q50, b.q75, b.q95];
+        const p = [0.05, 0.25, 0.5, 0.75, 0.95];
+        if (x < q[0]) return { v: 0.05, label: '低于5%', zone: 'below' };
+        if (x > q[4]) return { v: 0.95, label: '高于95%', zone: 'above' };
+        for (let i = 0; i < 4; i++) {
+          if (x <= q[i + 1]) {
+            const w = q[i + 1] > q[i] ? (x - q[i]) / (q[i + 1] - q[i]) : 0.5;
+            const v = p[i] + w * (p[i + 1] - p[i]);
+            return { v, label: `${Math.round(v * 100)}%`, zone: 'inside' };
+          }
+        }
+        return { v: 0.95, label: '95%', zone: 'inside' };
+      };
+      const order = { SOL: 0, BTC: 1, '15m': 0, '1h': 1, '2h': 2, '1d': 3 };
+      return summary.slice().sort((a, b) => order[a.asset] - order[b.asset] || order[a.scale] - order[b.scale]).map((s) => {
+        const bands = forecasts.filter((r) => r.key === s.key && r.step > 0);
+        const acts = actuals.filter((r) => r.key === s.key);
+        const byT = new Map(acts.map((r) => [r.t, r]));
+        const done = bands.filter((b) => byT.has(b.t) && !byT.get(b.t).live);
+        const inside = done.filter((b) => { const c = byT.get(b.t).close; return c >= b.q05 && c <= b.q95; }).length;
+        const last = done[done.length - 1];
+        const fileLive = acts.find((r) => r.live);
+        const tk = tick[s.asset];
+        // 现价：有实时报价用实时报价，对比它所在那根（正在形成的）K 线的预测；否则用币安文件里正在形成的那根
+        const liveBar = tk ? { close: tk.last, t: tk.time_bj, src: 'Crypto.com 实时' }
+          : (fileLive ? { close: fileLive.close, t: fileLive.t, src: '币安（每小时更新）' } : null);
+        const liveBand = tk ? bands.find((b) => `${b.t}:00` >= tk.time_bj) || null
+          : (fileLive ? bands.find((b) => b.t === fileLive.t) || null : null);
+        const lastPos = last ? position(last, byT.get(last.t).close) : null;
+        const livePos = liveBand ? position(liveBand, liveBar.close) : null;
+        const state = done.length === 0 ? '未开始' : (done.length >= s.bars ? '已结束' : '进行中');
+        return {
+          key: s.key, label: `${s.asset} · ${LABEL[s.scale]}`, asset: s.asset, scale: s.scale, state,
+          done: done.length, bars: s.bars, progress: `${done.length}/${s.bars}`,
+          last_t: last ? last.t : null, last_close: last ? byT.get(last.t).close : null, last_q50: last ? last.q50 : null,
+          dev: last ? byT.get(last.t).close / last.q50 - 1 : null,
+          pct: lastPos ? lastPos.v : null, pct_label: lastPos ? lastPos.label : '—', zone: lastPos ? lastPos.zone : null,
+          coverage: done.length ? inside / done.length : null,
+          live_t: liveBar ? liveBar.t : null, live_price: liveBar ? liveBar.close : null, live_src: liveBar ? liveBar.src : null,
+          live_bar_t: liveBand ? liveBand.t : null, live_q50: liveBand ? liveBand.q50 : null,
+          live_dev: liveBand ? liveBar.close / liveBand.q50 - 1 : null,
+          live_pct: livePos ? livePos.v : null, live_pct_label: livePos ? livePos.label : '—', live_zone: livePos ? livePos.zone : null,
+          ret_since: liveBar ? liveBar.close / s.last_close - 1 : null,
+        };
+      });
+    },
+  });
+
+  // 品种 / 周期按钮：只设置筛选和按钮的状态
+  (() => {
+    const sync = () => {
+      const s = window.fx.sel();
+      document.querySelectorAll('#asset-tabs button').forEach((b) => {
+        const on = b.getAttribute('data-asset') === s.asset;
+        b.classList.toggle('is-on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      document.querySelectorAll('#scale-tabs button').forEach((b) => {
+        const on = b.getAttribute('data-scale') === s.scale;
+        b.classList.toggle('is-on', on); b.setAttribute('aria-pressed', on ? 'true' : 'false');
+      });
+      document.querySelectorAll('#pos-note').forEach((el) => { el.hidden = !window.fx.POSITION[s.asset]; });
+    };
+    document.querySelectorAll('#asset-tabs button').forEach((b) => b.addEventListener('click', () => dash.setParams({ asset: b.getAttribute('data-asset') })));
+    document.querySelectorAll('#scale-tabs button').forEach((b) => b.addEventListener('click', () => dash.setParams({ scale: b.getAttribute('data-scale') })));
+    dash.onData(sync);
+  })();
+</script>
+
+<script>
+  // 文字类的小绘制
+  (() => {
+    const fx = window.fx;
+    const trackRow = () => {
+      const t = fx.rowsOf('tracking');
+      return t ? t.find((r) => r.key === fx.sel().key) || null : null;
+    };
+    const sumRow = () => {
+      const s = fx.rowsOf('summary');
+      return s ? s.find((r) => r.key === fx.sel().key) || null : null;
+    };
+    const tone = (el, v, goodWhenUp) => {
+      el.classList.remove('fx-good', 'fx-bad');
+      if (v == null || Math.abs(v) < 1e-9) return;
+      el.classList.add((v > 0) === goodWhenUp ? 'fx-good' : 'fx-bad');
+    };
+    const mark = (el, key) => { el.setAttribute('data-where', `key=${key}`); };
+
+    dash.draw('updated', (el) => {
+      const d = dash.data('actuals');
+      const m = d.status === 'ok' && Array.isArray(d.meta) ? d.meta.find((x) => x.label && x.label.indexOf('生成时间') === 0) : null;
+      el.textContent = m ? `于 ${m.value}` : '—';
+    });
+
+    dash.draw('lede', (el) => {
+      const r = trackRow(); const s = sumRow(); const sel = fx.sel();
+      el.replaceChildren();
+      if (!r || !s) { el.textContent = '—'; return; }
+      const pf = fx.priceFmt(sel.asset);
+      const span = (text, field, src = 'tracking') => {
+        const b = document.createElement('b'); b.textContent = text;
+        b.setAttribute('data-source', src); b.setAttribute('data-field', field); mark(b, sel.key); return b;
+      };
+      const add = (...xs) => xs.forEach((x) => el.append(typeof x === 'string' ? document.createTextNode(x) : x));
+      add(`${r.label} 预测（${s.anchor} 起，共 ${s.bars} 根）已收盘 `, span(String(r.done), 'done'), ' 根。');
+      if (r.live_price != null && r.live_dev != null) {
+        add('现价 ', span(pf(r.live_price), 'live_price'), `，比这根 K 线收盘的预测中位数${r.live_dev >= 0 ? '高' : '低'} `,
+          span(d3.format('.2%')(Math.abs(r.live_dev)), 'live_dev'), '，处在预测分布的 ', span(r.live_pct_label, 'live_pct_label'),
+          r.live_zone === 'inside' ? ' 位置，仍在预测区间内。' : '，已经跑出预测区间。');
+      } else if (r.state === '已结束' && r.dev != null) {
+        add('这次预测已结束，最后一根实际收盘比预测中位数', r.dev >= 0 ? '高 ' : '低 ', span(d3.format('.2%')(Math.abs(r.dev)), 'dev'), '。');
+      } else if (r.live_price != null) {
+        add('现价 ', span(pf(r.live_price), 'live_price'), '。');
+      }
+    });
+
+    dash.draw('c-price', (el) => {
+      const r = trackRow(); mark(el, fx.sel().key);
+      el.textContent = r && r.live_price != null ? fx.priceFmt(r.asset)(r.live_price) : '—';
+    });
+    dash.draw('c-price-sub', (el) => {
+      const r = trackRow(); const s = sumRow();
+      if (!r || !s || r.ret_since == null) { el.textContent = '—'; return; }
+      el.textContent = `${r.live_src || ''} ${r.live_t ? r.live_t.slice(11) : ''} · 较预测起点 ${fx.priceFmt(r.asset)(s.last_close)} ${fx.pct(r.ret_since)}`;
+    });
+    dash.draw('c-dev', (el) => {
+      const r = trackRow(); mark(el, fx.sel().key);
+      el.textContent = r && r.live_dev != null ? fx.pct(r.live_dev) : '—';
+      tone(el, r ? r.live_dev : null, true);
+    });
+    dash.draw('c-dev-sub', (el) => {
+      const r = trackRow();
+      if (!r || r.live_q50 == null) { el.textContent = r && r.state === '已结束' ? '预测已结束' : '—'; return; }
+      el.textContent = `${r.live_bar_t} 收盘的预测中位 ${fx.priceFmt(r.asset)(r.live_q50)}`;
+    });
+    dash.draw('c-pos', (el) => {
+      const r = trackRow(); mark(el, fx.sel().key);
+      el.textContent = r ? r.live_pct_label : '—';
+      el.classList.remove('fx-warn');
+      if (r && r.live_zone && r.live_zone !== 'inside') el.classList.add('fx-warn');
+    });
+    dash.draw('c-pos-sub', (el) => {
+      const r = trackRow();
+      if (!r || !r.live_zone) { el.textContent = '—'; return; }
+      el.textContent = r.live_zone === 'inside' ? '在 5–95% 区间内' : (r.live_zone === 'above' ? '高于预测区间上沿' : '低于预测区间下沿');
+    });
+    dash.draw('c-end', (el) => {
+      const s = sumRow(); mark(el, fx.sel().key);
+      el.textContent = s ? fx.pct(s.med_ret) : '—';
+      tone(el, s ? s.med_ret : null, true);
+    });
+    dash.draw('c-end-sub', (el) => {
+      const s = sumRow();
+      if (!s) { el.textContent = '—'; return; }
+      el.textContent = `到 ${s.end}，区间 ${fx.pct(s.q05_ret)} ~ ${fx.pct(s.q95_ret)}，${fx.pct0(s.p_up)} 的路径上涨（${s.paths} 条）`;
+    });
+    dash.draw('chart-title', (el) => {
+      const sel = fx.sel(); const s = sumRow();
+      el.textContent = s ? `${sel.asset} ${fx.SCALE_LABEL[sel.scale]}：${s.anchor} 收盘后的 ${s.bars} 根 K 线` : `${sel.asset} ${fx.SCALE_LABEL[sel.scale]}：暂无预测`;
+    });
+    dash.draw('pos-note', (el) => {
+      const p = fx.POSITION[fx.sel().asset];
+      el.textContent = p ? `横线是你的持仓：开仓 ${p.entry}，止盈 ${p.tp.join(' / ')}，止损 ${p.sl.join(' / ')}。` : '';
+    });
+    dash.draw('legend-band-outer', (el) => { el.style.background = dash.colors[0]; el.style.opacity = '0.18'; });
+    dash.draw('legend-band-inner', (el) => { el.style.background = dash.colors[0]; el.style.opacity = '0.4'; });
+    dash.draw('legend-median', (el) => { el.style.color = dash.colors[0]; });
+
+    dash.draw('track-rows', (tbody) => {
+      const t = fx.rowsOf('tracking'); const sel = fx.sel();
+      tbody.replaceChildren();
+      if (!t) return;
+      t.forEach((r) => {
+        const tr = document.createElement('tr');
+        tr.setAttribute('data-key', r.key);
+        tr.classList.toggle('is-on', r.key === sel.key);
+        const cells = [
+          r.label,
+          `${r.progress}${r.state === '已结束' ? ' 结束' : ''}`,
+          r.dev == null ? '—' : fx.pct(r.dev),
+          r.pct_label,
+          r.coverage == null ? '—' : fx.pct0(r.coverage),
+        ];
+        cells.forEach((c, i) => {
+          const td = document.createElement('td'); td.textContent = c;
+          if (i === 2 && r.dev != null) td.className = r.dev >= 0 ? 'fx-good' : 'fx-bad';
+          if (i === 3 && r.zone && r.zone !== 'inside') td.className = 'fx-warn';
+          tr.append(td);
+        });
+        tr.addEventListener('click', () => dash.setParams({ asset: r.asset, scale: r.scale }));
+        tbody.append(tr);
+      });
+    });
+  })();
+</script>
+
+<script>
+  // K 线 + 预测区间图
+  dash.draw('chart', {
+    mount(el) {
+      const svg = d3.select(el).append('svg').attr('role', 'img');
+      const tip = d3.select(el).append('div').attr('class', 'fx-tip').attr('hidden', '');
+      return { svg, tip };
+    },
+    update(el, made) {
+      const fx = window.fx;
+      const { svg, tip } = made;
+      const sel = fx.sel();
+      const A = dash.data('actuals'), F = dash.data('forecasts'), S = dash.data('summary');
+      svg.selectAll('*').remove();
+      tip.attr('hidden', '');
+      const bad = [A, F, S].find((d) => d.status === 'error');
+      if ([A, F, S].some((d) => d.status !== 'ok')) {
+        svg.attr('viewBox', '0 0 300 60').attr('height', 60).attr('aria-label', '图表');
+        svg.append('text').attr('x', 0).attr('y', 30).style('fill', 'var(--color-fg-muted)').text(bad ? '加载失败' : '加载中…');
+        return;
+      }
+      const step = fx.STEP_MS[sel.scale];
+      let acts = A.data.filter((r) => r.key === sel.key).map((r) => ({ ...r, d: fx.parse(r.t) })).filter((r) => r.d);
+      const bands = F.data.filter((r) => r.key === sel.key).map((r) => ({ ...r, d: fx.parse(r.t) })).filter((r) => r.d).sort((a, b) => a.step - b.step);
+      // 历史 K 线只留约 1.2 倍预测长度（至少 24 根），让未来部分占主要画面
+      if (bands.length) {
+        const nHist = Math.max(24, Math.round((bands.length - 1) * 1.2));
+        const hist = acts.filter((r) => r.d <= bands[0].d);
+        if (hist.length > nHist) { const from = hist[hist.length - nHist].d; acts = acts.filter((r) => r.d >= from); }
+      }
+      const W = Math.max(280, el.clientWidth || 320);
+      const H = W < 520 ? 320 : 400;
+      svg.attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
+      if (!bands.length) {
+        svg.append('text').attr('x', 0).attr('y', 24).style('fill', 'var(--color-fg-muted)').text('这个周期还没有预测');
+        svg.attr('aria-label', '暂无预测');
+        return;
+      }
+      const pf = fx.priceFmt(sel.asset);
+      const anchor = bands[0].d;
+      const LD = dash.data(sel.asset === 'BTC' ? 'live_btc' : 'live_sol');
+      const tk = LD.status === 'ok' && Array.isArray(LD.data) && LD.data[0] && Number.isFinite(LD.data[0].last) ? LD.data[0] : null;
+      const tkD = tk ? fx.parse(tk.time_bj.slice(0, 16)) : null;
+      if (tk) {
+        // 文件里那根正在形成的 K 线如果还是当前这根，用实时价更新它的收盘、最高、最低
+        acts = acts.map((r) => (r.live && `${r.t}:00` >= tk.time_bj
+          ? { ...r, close: tk.last, high: Math.max(r.high, tk.last), low: Math.min(r.low, tk.last) } : r));
+      }
+      const pos = fx.POSITION[sel.asset];
+      const t0 = d3.min([...acts.map((r) => r.d), anchor]);
+      const t1 = d3.max([...acts.map((r) => r.d), bands[bands.length - 1].d]);
+      let lo = d3.min([...acts.map((r) => r.low), ...bands.map((b) => b.q05), ...(tk ? [tk.last] : [])]);
+      let hi = d3.max([...acts.map((r) => r.high), ...bands.map((b) => b.q95), ...(tk ? [tk.last] : [])]);
+      if (pos) { lo = Math.min(lo, ...pos.sl); hi = Math.max(hi, ...pos.tp); }
+      const pad = (hi - lo) * 0.04; lo -= pad; hi += pad;
+
+      const y = d3.scaleLinear().domain([lo, hi]).nice(6);
+      // 右侧价格轴：先量最宽的刻度标签
+      const ticks = y.ticks(W < 420 ? 5 : 7);
+      const probe = svg.append('g').attr('class', 'fx-axis');
+      let maxW = 0;
+      ticks.forEach((v) => { const t = probe.append('text').text(pf(v)); maxW = Math.max(maxW, t.node().getComputedTextLength()); });
+      probe.remove();
+      const M = { top: 12, right: Math.ceil(maxW) + 10, bottom: 26, left: 4 };
+      y.range([H - M.bottom, M.top]);
+      const x = d3.scaleUtc().domain([new Date(+t0 - step * 0.8), new Date(+t1 + step * 0.8)]).range([M.left, W - M.right]);
+      const bw = Math.max(1, Math.min(14, (x(new Date(+t0 + step)) - x(t0)) * 0.62));
+
+      svg.attr('aria-label', `${sel.asset} ${fx.SCALE_LABEL[sel.scale]} 实际 K 线与预测区间，预测从 ${bands[0].t} 开始`);
+      const g = svg.append('g');
+      g.append('g').attr('class', 'fx-grid').selectAll('line').data(ticks).join('line')
+        .attr('x1', M.left).attr('x2', W - M.right).attr('y1', (v) => y(v)).attr('y2', (v) => y(v));
+      const yAxis = g.append('g').attr('class', 'fx-axis').attr('transform', `translate(${W - M.right},0)`)
+        .call(d3.axisRight(y).tickValues(ticks).tickFormat(pf).tickSize(4));
+      yAxis.select('.domain').remove();
+      const liveBar = acts.find((r) => r.live);
+      const nowPrice = tk ? tk.last : (liveBar ? liveBar.close : null);
+      if (nowPrice != null) yAxis.selectAll('.tick').filter((v) => Math.abs(y(v) - y(nowPrice)) < 14).select('text').style('opacity', 0);
+      const nX = W < 420 ? 3 : 5;
+      const xFmt = d3.utcFormat(sel.scale === '1d' ? '%m-%d' : (sel.scale === '15m' ? '%d日%H:%M' : '%m-%d %H时'));
+      g.append('g').attr('class', 'fx-axis').attr('transform', `translate(0,${H - M.bottom})`)
+        .call(d3.axisBottom(x).ticks(nX).tickFormat(xFmt).tickSizeOuter(0));
+
+      const color = dash.colors[0];
+      const area = (a, b) => d3.area().x((r) => x(r.d)).y0((r) => y(r[a])).y1((r) => y(r[b]));
+      g.append('path').datum(bands).attr('d', area('q05', 'q95')).style('fill', color).style('opacity', 0.16);
+      g.append('path').datum(bands).attr('d', area('q25', 'q75')).style('fill', color).style('opacity', 0.32);
+      g.append('path').datum(bands).attr('d', d3.line().x((r) => x(r.d)).y((r) => y(r.q50)))
+        .style('fill', 'none').style('stroke', color).style('stroke-width', 1.6).style('stroke-dasharray', '5 4');
+
+      g.append('line').attr('x1', x(anchor)).attr('x2', x(anchor)).attr('y1', M.top).attr('y2', H - M.bottom)
+        .style('stroke', 'var(--cds-chart-reference)').style('stroke-dasharray', '2 3');
+      g.append('text').attr('x', x(anchor) + 4).attr('y', M.top + 10).style('fill', 'var(--cds-text-secondary)')
+        .style('font-size', 'var(--cds-font-size-caption)').text('预测起点');
+
+      if (pos) {
+        const lines = [
+          ...pos.tp.map((v) => ({ v, c: 'var(--color-ok)', dash: '6 4' })),
+          { v: pos.entry, c: 'var(--cds-chart-reference)', dash: null },
+          ...pos.sl.map((v) => ({ v, c: 'var(--color-bad)', dash: '6 4' })),
+        ];
+        lines.forEach((l) => g.append('line').attr('x1', M.left).attr('x2', W - M.right).attr('y1', y(l.v)).attr('y2', y(l.v))
+          .style('stroke', l.c).style('stroke-width', 1).style('stroke-dasharray', l.dash).style('opacity', 0.9));
+        const labels = [
+          { v: Math.max(...pos.tp), text: `止盈 ${pos.tp.join(' / ')}`, c: 'var(--color-ok)', dy: -4 },
+          { v: pos.entry, text: `开仓 ${pos.entry}`, c: 'var(--color-fg-muted)', dy: -4 },
+          { v: Math.min(...pos.sl), text: `止损 ${pos.sl.join(' / ')}`, c: 'var(--color-bad)', dy: 12 },
+        ];
+        labels.forEach((l) => g.append('text').attr('x', M.left + 2).attr('y', y(l.v) + l.dy)
+          .style('fill', l.c).style('font-size', 'var(--cds-font-size-caption)').text(l.text));
+      }
+
+      const up = 'var(--color-ok)', down = 'var(--color-bad)';
+      const c = g.append('g').selectAll('g').data(acts).join('g')
+        .style('opacity', (r) => (r.d <= anchor ? 0.45 : 1));
+      c.append('line').attr('x1', (r) => x(r.d)).attr('x2', (r) => x(r.d)).attr('y1', (r) => y(r.high)).attr('y2', (r) => y(r.low))
+        .style('stroke', (r) => (r.close >= r.open ? up : down)).style('stroke-width', 1);
+      c.append('rect').attr('x', (r) => x(r.d) - bw / 2).attr('width', bw)
+        .attr('y', (r) => y(Math.max(r.open, r.close))).attr('height', (r) => Math.max(1, Math.abs(y(r.open) - y(r.close))))
+        .style('fill', (r) => (r.live ? 'none' : (r.close >= r.open ? up : down)))
+        .style('stroke', (r) => (r.close >= r.open ? up : down)).style('stroke-width', (r) => (r.live ? 1.4 : 0));
+
+      if (nowPrice != null) {
+        g.append('line').attr('x1', M.left).attr('x2', W - M.right).attr('y1', y(nowPrice)).attr('y2', y(nowPrice))
+          .style('stroke', 'var(--color-fg)').style('stroke-width', 0.8).style('stroke-dasharray', '1 3');
+        if (tkD && tkD >= x.domain()[0] && tkD <= x.domain()[1]) {
+          g.append('circle').attr('cx', x(tkD)).attr('cy', y(nowPrice)).attr('r', 3.5)
+            .style('fill', 'var(--color-fg)').style('stroke', 'var(--color-bg)').style('stroke-width', 1.5);
+        }
+        const tag = g.append('g').attr('transform', `translate(${W - M.right},${y(nowPrice)})`);
+        const label = tag.append('text').attr('x', 6).attr('dy', '0.35em').style('fill', 'var(--color-bg)')
+          .style('font-size', 'var(--cds-font-size-caption)').style('font-weight', 'var(--cds-font-weight-medium)').text(pf(nowPrice));
+        const bb = label.node().getBBox();
+        tag.insert('rect', 'text').attr('x', 2).attr('y', bb.y - 2).attr('width', bb.width + 8).attr('height', bb.height + 4)
+          .attr('rx', 3).style('fill', 'var(--color-fg)');
+      }
+
+      // 点按 / 拖动看数值
+      const times = Array.from(new Set([...acts.map((r) => +r.d), ...bands.map((b) => +b.d)])).sort((a, b) => a - b);
+      const byA = new Map(acts.map((r) => [+r.d, r]));
+      const byB = new Map(bands.map((b) => [+b.d, b]));
+      const cursor = g.append('line').attr('y1', M.top).attr('y2', H - M.bottom).style('stroke', 'var(--color-fg-muted)')
+        .style('stroke-width', 1).style('opacity', 0);
+      const tf = d3.utcFormat('%m-%d %H:%M');
+      const show = (event) => {
+        const [px] = d3.pointer(event, svg.node());
+        const t = +x.invert(px);
+        const i = d3.bisectCenter(times, t);
+        const k = times[Math.max(0, Math.min(times.length - 1, i))];
+        const a = byA.get(k), b = byB.get(k);
+        cursor.attr('x1', x(new Date(k))).attr('x2', x(new Date(k))).style('opacity', 1);
+        tip.selectAll('*').remove();
+        tip.append('div').append('b').text(`${tf(new Date(k))} 收盘${a && a.live ? '（进行中）' : ''}`);
+        if (a) tip.append('div').text(`实际 开 ${pf(a.open)} 高 ${pf(a.high)} 低 ${pf(a.low)} 收 ${pf(a.close)}`);
+        if (b && b.step > 0) {
+          tip.append('div').text(`预测中位 ${pf(b.q50)}`);
+          tip.append('div').attr('class', 'fx-tip-muted').text(`5–95%：${pf(b.q05)} ~ ${pf(b.q95)}`);
+          if (a) tip.append('div').attr('class', 'fx-tip-muted').text(`实际比中位数 ${fx.pct(a.close / b.q50 - 1)}`);
+        } else if (b && b.step === 0) {
+          tip.append('div').attr('class', 'fx-tip-muted').text('预测起点');
+        }
+        tip.attr('hidden', null);
+        const tw = tip.node().offsetWidth, th = tip.node().offsetHeight;
+        const cx = x(new Date(k)) / W * el.clientWidth;
+        let left = cx + 12; if (left + tw > el.clientWidth) left = cx - tw - 12;
+        tip.style('left', `${Math.max(0, left)}px`).style('top', `${Math.max(0, M.top)}px`);
+        if (th > H) tip.style('top', '0px');
+      };
+      svg.append('rect').attr('x', M.left).attr('y', M.top).attr('width', W - M.left - M.right).attr('height', H - M.top - M.bottom)
+        .style('fill', 'transparent').style('cursor', 'crosshair')
+        .on('pointermove', show).on('pointerdown', show)
+        .on('pointerleave', () => { cursor.style('opacity', 0); tip.attr('hidden', ''); });
+    },
+  });
+</script>

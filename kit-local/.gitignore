@@ -3,4 +3,4 @@ KiT/
 outputs/
 __pycache__/
 data_crypto/
-dashboard/
+dashboard/*.json
