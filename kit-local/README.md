@@ -118,6 +118,8 @@ python -m venv .venv
 copy ckpt\step_market_284M\step_market_284M.pt ckpt\step_market_284M.pt
 ```
 
+> 下载时如果报 `cas-server.xethub.hf.co` 相关错误（Xet 协议被代理或镜像拦截），先执行 `$env:HF_HUB_DISABLE_XET=1` 再下载，就会改用普通 HTTPS。`setup.sh` 默认就是这样做的。
+
 > 注意 1：视频里的示例命令 `--case 300750.SZ,30m,"2026-03-10 11:30"` 用示例数据跑会直接报错，因为 300750.SZ（宁德时代）不在那 100 只示例股票里。示例股票列表见 `KiT/data/instruments.json`。
 >
 > 注意 2：视频和官方 README 里的 `huggingface-cli download Lucifer744/KiT_model --local-dir ckpt/` 会下载**两个**模型（2.3GB），而且模型文件在子目录 `ckpt/step_market_284M/` 下。官方脚本默认找的是 `ckpt/step_market_284M.pt`，所以要么加 `--ckpt ckpt/step_market_284M/step_market_284M.pt`，要么像上面那样复制或软链接一份。`setup.sh` 已经处理了这一点。

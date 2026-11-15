@@ -48,6 +48,9 @@ fi
 "$VPY" -m pip install -q numpy pandas pyarrow matplotlib huggingface_hub
 
 echo "==> 3/4 下载模型和数据（Hugging Face）"
+# 默认用普通 HTTPS 下载，不走 Xet 协议（cas-server.xethub.hf.co）：镜像站和公司代理下更稳。
+# 想用 Xet 加速可以: HF_HUB_DISABLE_XET=0 bash setup.sh
+export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
 cd "$KIT"
 WANT_DATA=$WANT_DATA WANT_BOTH=$WANT_BOTH "$VPY" - <<'PY'
 import os
