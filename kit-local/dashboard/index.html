@@ -58,6 +58,9 @@
   .fx-panel.is-rotated { position: absolute; top: 0; left: 0; transform-origin: top left; overflow: hidden; box-sizing: border-box; padding: 12px; gap: 8px; }
   .fx-panel.is-rotated #chart-zoom-hint, .fx-panel.is-rotated #legend, .fx-panel.is-rotated #pos-note, .fx-panel.is-rotated #chart-tip { display: none; }
   .fx-panel:fullscreen { background: var(--color-bg); overflow: auto; padding: max(12px, env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) max(12px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px)); }
+  .fx-stats { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--cds-gap-sm); }
+  .fx-stats > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+  .fx-chart-sm { min-height: 220px; }
   .fx details summary { cursor: pointer; font-weight: var(--cds-font-weight-medium); }
   .fx details ul { margin: var(--cds-gap-sm) 0 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; line-height: 1.55; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
 </style>
@@ -148,13 +151,32 @@
     </div>
   </section>
 
+  <section class="fx-panel" id="reliability">
+    <h2 id="rel-title">模型可信度：BTC 日线 2026 年样本外回测</h2>
+    <p class="fx-lede" id="rel-lede" data-draw="rel-lede">—</p>
+    <div class="fx-stats" id="rel-stats">
+      <div>
+        <span class="fx-label">涨跌方向猜对</span>
+        <span class="fx-big" data-draw="rel-hit" data-source="backtest_stats" data-field="hit_rate" data-row="0">—</span>
+        <span class="fx-small" data-draw="rel-hit-sub">—</span>
+      </div>
+      <div>
+        <span class="fx-label">实际结果落在 5–95% 区间</span>
+        <span class="fx-big" data-draw="rel-band" data-source="backtest_stats" data-field="band_rate" data-row="0">—</span>
+        <span class="fx-small">理想情况约 90%，偏低说明区间太窄</span>
+      </div>
+    </div>
+    <div class="fx-chart fx-chart-sm" id="rel-chart" data-draw="rel-chart" data-source="backtest"></div>
+    <p class="fx-muted" id="rel-note">每一列是一个 20 天窗口，标的是窗口开始的日期：竖条是预测的 5–95% 区间，横线是预测中位数，圆点是实际涨跌幅，跑出区间的圆点标成橙色。模型训练只用到 2025 年底的数据，这些窗口都是它没见过的行情。15 分钟、1 小时、2 小时线还没有回测。</p>
+  </section>
+
   <section class="fx-panel" id="about">
     <details id="notes">
       <summary>这些预测怎么读、能信多少</summary>
       <ul>
         <li>KiT 每次采样 16–32 条可能的未来走势。图上的色带是这些走势在每根 K 线收盘时的分布：深色是中间一半（25–75%），浅色是 5–95%。</li>
         <li>「在预测分布中的位置」：现价在这根 K 线收盘价预测分布里的分位。50% 表示正好在中位数，低于 5% 或高于 95% 就是跑出了预测区间。</li>
-        <li>短周期（15 分钟、1 小时、2 小时）的预测还没有在 BTC、SOL 上做过回测。日线在 2026 年样本外的前几个窗口里方向判断并不可靠，2 月那波 −20% 的下跌没有预测到。</li>
+        <li>短周期（15 分钟、1 小时、2 小时）的预测还没有在 BTC、SOL 上做过回测。日线的样本外回测见上方「模型可信度」。</li>
         <li>模型生成的 K 线影线比真实的长，所以「最高价 / 最低价碰到某个价位」的概率会被高估，看收盘价更可靠。</li>
         <li>模型训练用的是 UTC 切日的日线，日线在北京时间 08:00 收盘。K 线和模型输入都用 OKX 永续合约（BTC-USDT-SWAP、SOL-USDT-SWAP）。OKX 没有可用的实时连接器，所以现价用 Crypto.com 现货，与 OKX 合约价通常相差不到 0.1%。</li>
         <li>仅供研究参考，不构成投资建议。</li>
@@ -305,6 +327,110 @@
     document.querySelectorAll('#asset-tabs button').forEach((b) => b.addEventListener('click', () => dash.setParams({ asset: b.getAttribute('data-asset') })));
     document.querySelectorAll('#scale-tabs button').forEach((b) => b.addEventListener('click', () => dash.setParams({ scale: b.getAttribute('data-scale') })));
     dash.onData(sync);
+  })();
+</script>
+
+<script>
+  // 回测汇总与图
+  dash.calc('backtest_stats', {
+    inputs: ['backtest'],
+    title: '回测汇总',
+    description: 'BTC 日线 2026 年样本外回测：方向猜对的比例、实际收涨窗口的比例（「一直猜涨」能达到的命中率）、实际结果落在 5–95% 预测区间内的比例',
+    fn: (backtest) => {
+      const n = backtest.length;
+      if (!n) return [];
+      const hits = backtest.filter((r) => r.hit === 1).length;
+      const ups = backtest.filter((r) => r.actual > 0).length;
+      const inBand = backtest.filter((r) => r.in_band === 1).length;
+      return [{ windows: n, hits, hit_rate: hits / n, ups, up_rate: ups / n, in_band: inBand, band_rate: inBand / n }];
+    },
+  });
+  (() => {
+    const st = () => { const d = dash.data('backtest_stats'); return d.status === 'ok' && Array.isArray(d.data) && d.data[0] ? d.data[0] : null; };
+    const pct0 = d3.format('.0%');
+    dash.draw('rel-lede', (el) => {
+      const r = st();
+      el.replaceChildren();
+      if (!r) { el.textContent = '—'; return; }
+      const b = (text, field) => { const e = document.createElement('b'); e.textContent = text;
+        e.setAttribute('data-source', 'backtest_stats'); e.setAttribute('data-field', field); e.setAttribute('data-row', '0'); return e; };
+      const verdict = r.hit_rate > r.up_rate + 0.05 ? '比「一直猜涨」好一些' : (r.hit_rate < r.up_rate - 0.05 ? '还不如「一直猜涨」' : '和「一直猜涨」差不多');
+      el.append(b(String(r.windows), 'windows'), document.createTextNode(' 个窗口里，方向猜对 '), b(String(r.hits), 'hits'),
+        document.createTextNode(` 次，${verdict}（同期收涨的窗口占 `), b(pct0(r.up_rate), 'up_rate'),
+        document.createTextNode('）；实际结果落在 5–95% 区间内的只有 '), b(pct0(r.band_rate), 'band_rate'),
+        document.createTextNode('。参考价值主要在区间和波动，不在方向。'));
+    });
+    dash.draw('rel-hit', (el) => { const r = st(); el.textContent = r ? pct0(r.hit_rate) : '—'; });
+    dash.draw('rel-hit-sub', (el) => { const r = st(); el.textContent = r ? `${r.hits}/${r.windows} 个窗口；一直猜涨是 ${pct0(r.up_rate)}` : '—'; });
+    dash.draw('rel-band', (el) => { const r = st(); el.textContent = r ? pct0(r.band_rate) : '—';
+      el.classList.toggle('fx-warn', !!r && r.band_rate < 0.8); });
+
+    dash.draw('rel-chart', {
+      mount(el) {
+        const svg = d3.select(el).append('svg').attr('role', 'img');
+        const tip = d3.select(el).append('div').attr('class', 'fx-tip').attr('hidden', '');
+        return { svg, tip };
+      },
+      update(el, { svg, tip }) {
+        svg.selectAll('*').remove();
+        tip.attr('hidden', '');
+        const d = dash.data('backtest');
+        if (d.status !== 'ok' || !Array.isArray(d.data) || !d.data.length) {
+          svg.attr('viewBox', '0 0 300 40').attr('height', 40);
+          svg.append('text').attr('y', 24).style('fill', 'var(--color-fg-muted)').text(d.status === 'error' ? '加载失败' : (d.status === 'ok' ? '暂无回测' : '加载中…'));
+          return;
+        }
+        const rows = d.data;
+        const W = Math.max(280, el.clientWidth || 320), H = 240;
+        const pf = d3.format('+.0%');
+        const lo = d3.min(rows, (r) => Math.min(r.q05, r.actual)), hi = d3.max(rows, (r) => Math.max(r.q95, r.actual));
+        const y = d3.scaleLinear().domain([Math.min(lo, 0), Math.max(hi, 0)]).nice(5);
+        const ticks = y.ticks(5);
+        const probe = svg.append('g').attr('class', 'fx-axis');
+        let maxW = 0;
+        ticks.forEach((v) => { const t = probe.append('text').text(pf(v)); maxW = Math.max(maxW, t.node().getComputedTextLength()); });
+        probe.remove();
+        const M = { top: 8, right: 6, bottom: 24, left: Math.ceil(maxW) + 8 };
+        y.range([H - M.bottom, M.top]);
+        const x = d3.scaleBand().domain(rows.map((r) => r.anchor)).range([M.left, W - M.right]).padding(0.35);
+        svg.attr('viewBox', `0 0 ${W} ${H}`).attr('height', H)
+          .attr('aria-label', `BTC 日线 ${rows.length} 个回测窗口的预测区间与实际涨跌幅`);
+        svg.append('g').attr('class', 'fx-grid').selectAll('line').data(ticks).join('line')
+          .attr('x1', M.left).attr('x2', W - M.right).attr('y1', (v) => y(v)).attr('y2', (v) => y(v));
+        svg.append('line').attr('x1', M.left).attr('x2', W - M.right).attr('y1', y(0)).attr('y2', y(0)).style('stroke', 'var(--cds-chart-reference)');
+        const ya = svg.append('g').attr('class', 'fx-axis').attr('transform', `translate(${M.left},0)`)
+          .call(d3.axisLeft(y).tickValues(ticks).tickFormat(pf).tickSize(3));
+        ya.select('.domain').remove();
+        const every = Math.ceil(rows.length / Math.max(3, Math.floor((W - M.left) / 70)));
+        svg.append('g').attr('class', 'fx-axis').attr('transform', `translate(0,${H - M.bottom})`)
+          .call(d3.axisBottom(x).tickValues(rows.filter((r, i) => i % every === 0).map((r) => r.anchor))
+            .tickFormat((t) => t.slice(5, 10)).tickSizeOuter(0));
+        const color = dash.colors[0], bw = x.bandwidth();
+        const g = svg.append('g').selectAll('g').data(rows).join('g');
+        g.append('rect').attr('x', (r) => x(r.anchor)).attr('width', bw).attr('y', (r) => y(r.q95))
+          .attr('height', (r) => Math.max(1, y(r.q05) - y(r.q95))).attr('rx', 2).style('fill', color).style('opacity', 0.28);
+        g.append('line').attr('x1', (r) => x(r.anchor) - 2).attr('x2', (r) => x(r.anchor) + bw + 2)
+          .attr('y1', (r) => y(r.pred_median)).attr('y2', (r) => y(r.pred_median)).style('stroke', color).style('stroke-width', 2);
+        g.append('circle').attr('cx', (r) => x(r.anchor) + bw / 2).attr('cy', (r) => y(r.actual)).attr('r', 4)
+          .style('fill', (r) => (r.in_band ? 'var(--color-fg)' : 'var(--color-warn)')).style('stroke', 'var(--color-bg)').style('stroke-width', 1.5);
+        const show = (event, r) => {
+          tip.selectAll('*').remove();
+          tip.append('div').append('b').text(`${r.anchor.slice(0, 10)} 起 20 天`);
+          tip.append('div').text(`预测中位 ${d3.format('+.1%')(r.pred_median)}，实际 ${d3.format('+.1%')(r.actual)}`);
+          tip.append('div').attr('class', 'fx-tip-muted').text(`5–95%：${d3.format('+.1%')(r.q05)} ~ ${d3.format('+.1%')(r.q95)}`);
+          tip.append('div').attr('class', 'fx-tip-muted').text(`${r.hit ? '方向对' : '方向错'}，${r.in_band ? '在区间内' : '跑出区间'}`);
+          tip.attr('hidden', null);
+          const cw = el.clientWidth || W, tw = tip.node().offsetWidth;
+          const cx = (x(r.anchor) + bw / 2) / W * cw;
+          let left = cx + 10; if (left + tw > cw) left = cx - tw - 10;
+          tip.style('left', `${Math.max(0, left)}px`).style('top', '0px');
+        };
+        g.append('rect').attr('x', (r) => x(r.anchor) - x.step() * x.paddingInner() / 2).attr('width', x.step())
+          .attr('y', M.top).attr('height', H - M.top - M.bottom).style('fill', 'transparent')
+          .on('pointerenter', show).on('pointerdown', show)
+          .on('pointerleave', (event) => { if (event.pointerType === 'mouse') tip.attr('hidden', ''); });
+      },
+    });
   })();
 </script>
 
