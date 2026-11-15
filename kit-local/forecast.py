@@ -32,6 +32,7 @@ import os
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 
 import argparse
+import contextlib
 import json
 import math
 import sys
@@ -196,9 +197,13 @@ def forecast_window(model, cfg, df: pd.DataFrame, end: pd.Timestamp, *, code: st
 
     t0 = time.time()
     chunk = 48 if device.type == "cuda" else 16
-    z = flow_sample(model, win["x_ctx"], win["cond"], Lh=Lh, steps=steps, solver="euler", n_paths=paths,
-                    generator=torch.Generator().manual_seed(seed), device=device, chunk_size=chunk,
-                    precision=precision)
+    # KiT 只在 CUDA 上启用低精度；CPU 上指定 bf16 时在外层套 CPU autocast（有 AMX/AVX512-BF16 的 CPU 会快很多）
+    cpu_amp = (torch.autocast("cpu", dtype=torch.bfloat16) if device.type == "cpu" and precision == "bf16"
+               else contextlib.nullcontext())
+    with cpu_amp:
+        z = flow_sample(model, win["x_ctx"], win["cond"], Lh=Lh, steps=steps, solver="euler", n_paths=paths,
+                        generator=torch.Generator().manual_seed(seed), device=device, chunk_size=chunk,
+                        precision=precision)
     feats = denormalize_paths(z, market, scale, stats, c=cfg.data.soft_clip_c)[0]
     pred = {k: np.asarray(v) for k, v in
             paths_to_ohlcv(feats, win["prev_close"], win["prev_ema"], win["half_life_bars"]).items()}
@@ -284,7 +289,7 @@ def main() -> None:
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--precision", choices=("fp32", "bf16", "fp16"), default=None,
-                    help="默认 CUDA 上 bf16、CPU 上 fp32（与官方一致）")
+                    help="默认 CUDA 上 bf16、CPU 上 fp32（与官方一致）。CPU 支持 AMX/AVX512-BF16 时可用 bf16 提速（fp16 仅 CUDA）")
     ap.add_argument("--ctx-show", type=int, default=80, help="图里显示多少根历史 K 线")
     ap.add_argument("--out", type=Path, default=HERE / "outputs")
     ap.add_argument("--no-plot", action="store_true")

@@ -48,6 +48,8 @@ def main() -> None:
     ap.add_argument("--ckpt", type=Path, default=F.DEFAULT_CKPT)
     ap.add_argument("--data-root", type=Path, default=F.KIT_ROOT / "data")
     ap.add_argument("--device", default="cuda" if F.torch.cuda.is_available() else "cpu")
+    ap.add_argument("--precision", choices=("fp32", "bf16"), default=None,
+                    help="默认 CUDA 上 bf16、CPU 上 fp32；CPU 支持 AMX/AVX512-BF16 时可用 bf16 提速")
     ap.add_argument("--out", type=Path, default=F.HERE / "outputs")
     args = ap.parse_args()
 
@@ -58,7 +60,7 @@ def main() -> None:
     tdays = F.build_calendar(market, args.data_root, None, ts)
     model, cfg, instruments, stats = F.load_bundle(args.ckpt, args.data_root, args.seed)
     device = F.torch.device(args.device)
-    precision = "bf16" if device.type == "cuda" else "fp32"
+    precision = args.precision or ("bf16" if device.type == "cuda" else "fp32")
     model.to(device).eval()
     Lc, Lh = cfg.data.window_for(scale)
 
@@ -68,7 +70,7 @@ def main() -> None:
     if not idx:
         raise SystemExit("区间内没有完整的检验窗口")
     print(f"{code} {scale} ({market}): {len(idx)} 个不重叠窗口，锚点 {ts[idx[0]]} .. {ts[idx[-1]]}，"
-          f"每个窗口预测 {Lh} 根，K={args.paths}, steps={args.steps}, device={device}", flush=True)
+          f"每个窗口预测 {Lh} 根，K={args.paths}, steps={args.steps}, device={device}, precision={precision}", flush=True)
 
     rows = []
     for j, i in enumerate(idx):
@@ -112,7 +114,7 @@ def main() -> None:
         "spearman_vol_prev_window": spearman(t["prev_vol"], t["real_vol"]),
         "mean_pred_vol": float(t["pred_vol"].mean()), "mean_real_vol": float(t["real_vol"].mean()),
     }
-    tag = f"backtest_{code}_{scale}_{t['anchor'].iloc[0]:%Y%m%d}_{t['anchor'].iloc[-1]:%Y%m%d}"
+    tag = f"backtest_{code}_{scale}_{t['anchor'].iloc[0]:%Y%m%d}_{t['anchor'].iloc[-1]:%Y%m%d}_{precision}"
     args.out.mkdir(parents=True, exist_ok=True)
     t.to_csv(args.out / f"{tag}.csv", index=False)
     pd.Series(summary).to_json(args.out / f"{tag}_summary.json", indent=2, force_ascii=False)
