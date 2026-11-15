@@ -73,7 +73,7 @@ print(f"    torch {torch.__version__}  可用设备: {dev}")
 if dev == "cuda":
     print(f"    GPU: {torch.cuda.get_device_name(0)}  显存 {torch.cuda.get_device_properties(0).total_memory / 2**30:.1f} GB")
 else:
-    print("    没有 CUDA：会用 CPU 推理（fp32），能跑但慢，单个案例约几十秒到几分钟")
+    print("    没有 CUDA：会用 CPU 推理（fp32），能跑但慢（4 核实测：日线约 5 分钟/案例，30 分钟线约 15 分钟/案例）")
 PY
 echo
 echo "部署完成。试试："
