@@ -15,8 +15,8 @@
   #       也认 akshare 的中文列名 日期/时间, 开盘, 最高, 最低, 收盘, 成交量）
   python forecast.py --file my_600519_1d.csv --code 600519.SH --scale 1d
 
-  # 加密货币：先用 fetch_binance.py 下载（时间戳 = K 线收盘时间，UTC）
-  python fetch_binance.py --symbol BTCUSDT --interval 1d
+  # 加密货币：先用 fetch_crypto.py 下载（币安或 OKX）（时间戳 = K 线收盘时间，UTC）
+  python fetch_crypto.py --symbol BTCUSDT --interval 1d          # 或 --exchange okx
   python forecast.py --market crypto --code BTCUSDT --scale 1d --file data_crypto/BTCUSDT_1d.csv
 
 每个周期需要的历史长度由模型固定：
@@ -293,7 +293,7 @@ def main() -> None:
     market, scale = args.market, args.scale
     code = args.code.strip().upper()
     if args.file is None and market != "ashare":
-        raise SystemExit("加密货币需要用 --file 指定数据（可先运行 fetch_binance.py 下载）")
+        raise SystemExit("加密货币需要用 --file 指定数据（可先运行 fetch_crypto.py 下载）")
     path = args.file or (args.data_root / "ashare" / scale / f"{code}.parquet")
     df = load_bars(path, scale, market, open_time=args.open_time)
     ts = pd.DatetimeIndex(df["datetime"])
