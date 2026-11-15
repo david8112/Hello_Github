@@ -43,6 +43,17 @@
   .fx-table th { color: var(--color-fg-muted); font-weight: var(--cds-font-weight-medium); }
   .fx-table tbody tr { cursor: pointer; }
   .fx-table tbody tr.is-on td { background: var(--color-bg); font-weight: var(--cds-font-weight-medium); }
+  .fx-chart-head { display: flex; flex-wrap: wrap; gap: var(--cds-gap-sm); align-items: flex-start; justify-content: space-between; }
+  .fx-chart-head h2 { flex: 1 1 200px; min-width: 0; }
+  .fx-chart-actions { display: flex; gap: var(--cds-gap-sm); flex-wrap: wrap; }
+  .fx-btn { appearance: none; border: 1px solid var(--color-border-line); background: var(--color-bg); color: var(--color-fg); font: inherit;
+    font-size: var(--cds-font-size-caption); padding: 7px 12px; border-radius: var(--cds-radius); cursor: pointer; min-height: 36px; }
+  .fx-btn-strong { background: var(--color-fg); color: var(--color-bg); border-color: var(--color-fg); }
+  .fx-btn:focus-visible { outline: 2px solid var(--color-fg); outline-offset: 2px; }
+  .fx-panel > * { flex-shrink: 0; }
+  .fx-panel.is-full { border-radius: 0; }
+  .fx-panel.is-full .fx-chart { touch-action: none; }
+  .fx-panel:fullscreen { background: var(--color-bg); overflow: auto; padding: max(12px, env(safe-area-inset-top, 0px)) max(12px, env(safe-area-inset-right, 0px)) max(12px, env(safe-area-inset-bottom, 0px)) max(12px, env(safe-area-inset-left, 0px)); }
   .fx details summary { cursor: pointer; font-weight: var(--cds-font-weight-medium); }
   .fx details ul { margin: var(--cds-gap-sm) 0 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; line-height: 1.55; font-size: var(--cds-font-size-caption); color: var(--color-fg-muted); }
 </style>
@@ -91,7 +102,15 @@
   </section>
 
   <section class="fx-panel" id="chart-panel">
-    <h2 id="chart-title" data-draw="chart-title">—</h2>
+    <div class="fx-chart-head" id="chart-head">
+      <h2 id="chart-title" data-draw="chart-title">—</h2>
+      <div class="fx-chart-actions" id="chart-actions">
+        <button type="button" class="fx-btn" id="chart-reset" hidden>重置缩放</button>
+        <button type="button" class="fx-btn" id="chart-expand">全屏查看</button>
+        <button type="button" class="fx-btn fx-btn-strong" id="chart-collapse" hidden>退出全屏</button>
+      </div>
+    </div>
+    <p class="fx-muted" id="chart-zoom-hint" hidden>双指缩放、单指左右拖动平移（电脑上用滚轮），点按查看数值。横屏看更清楚。</p>
     <div class="fx-chart" id="chart" data-draw="chart" data-source="actuals forecasts live_sol live_btc"></div>
     <div class="fx-legend" id="legend">
       <span><i class="fx-key" style="background: var(--color-ok)"></i>阳线（涨）</span>
@@ -411,20 +430,68 @@
 </script>
 
 <script>
-  // K 线 + 预测区间图
+  // 全屏按钮：只切换 class / hidden，并请求系统全屏（不支持时退回到「撑满屏幕高度」）
+  (() => {
+    const panels = document.querySelectorAll('#chart-panel');
+    if (!panels.length) return;
+    const panel = panels[0];
+    const set = (on) => {
+      panel.classList.toggle('is-full', on);
+      document.querySelectorAll('#chart-expand').forEach((b) => { b.hidden = on; });
+      document.querySelectorAll('#chart-collapse, #chart-reset, #chart-zoom-hint').forEach((b) => { b.hidden = !on; });
+      window.fx.zoomResetAt = Date.now();
+      dash.draw('chart');
+      if (on && panel.scrollIntoView) panel.scrollIntoView({ block: 'start' });
+    };
+    document.querySelectorAll('#chart-expand').forEach((b) => b.addEventListener('click', () => {
+      set(true);
+      const req = panel.requestFullscreen || panel.webkitRequestFullscreen;
+      if (req) {
+        try { const p = req.call(panel); if (p && p.catch) p.catch(() => {}); } catch (e) { /* 不支持系统全屏 */ }
+      }
+    }));
+    document.querySelectorAll('#chart-collapse').forEach((b) => b.addEventListener('click', () => {
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+      if (fsEl === panel) {
+        const ex = document.exitFullscreen || document.webkitExitFullscreen;
+        try { const p = ex.call(document); if (p && p.catch) p.catch(() => {}); } catch (e) { /* ignore */ }
+      }
+      set(false);
+    }));
+    document.querySelectorAll('#chart-reset').forEach((b) => b.addEventListener('click', () => {
+      window.fx.zoomResetAt = Date.now();
+      dash.draw('chart');
+    }));
+    const onFs = () => {
+      const fsEl = document.fullscreenElement || document.webkitFullscreenElement;
+      if (!fsEl && panel.classList.contains('is-full')) set(false); else dash.draw('chart');
+    };
+    document.addEventListener('fullscreenchange', onFs);
+    document.addEventListener('webkitfullscreenchange', onFs);
+  })();
+</script>
+
+<script>
+  // K 线 + 预测区间图（全屏时可双指缩放、拖动平移，价格轴跟随可见范围）
   dash.draw('chart', {
     mount(el) {
       const svg = d3.select(el).append('svg').attr('role', 'img');
       const tip = d3.select(el).append('div').attr('class', 'fx-tip').attr('hidden', '');
-      return { svg, tip };
+      return { svg, tip, zt: d3.zoomIdentity, resetSeen: null, key: null, wasFull: false };
     },
     update(el, made) {
       const fx = window.fx;
       const { svg, tip } = made;
       const sel = fx.sel();
-      const A = dash.data('actuals'), F = dash.data('forecasts'), S = dash.data('summary');
+      const panel = el.closest('#chart-panel');
+      const full = !!panel && panel.classList.contains('is-full');
+      if (!full || !made.wasFull || made.key !== sel.key || made.resetSeen !== (fx.zoomResetAt || 0)) made.zt = d3.zoomIdentity;
+      made.wasFull = full; made.key = sel.key; made.resetSeen = fx.zoomResetAt || 0;
+
       svg.selectAll('*').remove();
+      svg.on('.zoom', null);
       tip.attr('hidden', '');
+      const A = dash.data('actuals'), F = dash.data('forecasts'), S = dash.data('summary');
       const bad = [A, F, S].find((d) => d.status === 'error');
       if ([A, F, S].some((d) => d.status !== 'ok')) {
         svg.attr('viewBox', '0 0 300 60').attr('height', 60).attr('aria-label', '图表');
@@ -434,22 +501,29 @@
       const step = fx.STEP_MS[sel.scale];
       let acts = A.data.filter((r) => r.key === sel.key).map((r) => ({ ...r, d: fx.parse(r.t) })).filter((r) => r.d);
       const bands = F.data.filter((r) => r.key === sel.key).map((r) => ({ ...r, d: fx.parse(r.t) })).filter((r) => r.d).sort((a, b) => a.step - b.step);
-      // 历史 K 线只留约 1.2 倍预测长度（至少 24 根），让未来部分占主要画面
-      if (bands.length) {
-        const nHist = Math.max(24, Math.round((bands.length - 1) * 1.2));
-        const hist = acts.filter((r) => r.d <= bands[0].d);
-        if (hist.length > nHist) { const from = hist[hist.length - nHist].d; acts = acts.filter((r) => r.d >= from); }
-      }
       const W = Math.max(280, el.clientWidth || 320);
-      const H = W < 520 ? 320 : 400;
+      let H = W < 520 ? 320 : 400;
+      if (full) {
+        // 全屏：图表高度 = 屏幕高度 - 标题和按钮 - 提示 - 边距
+        const head = panel.querySelector('#chart-head');
+        const hint = panel.querySelector('#chart-zoom-hint');
+        const reserve = (head ? head.offsetHeight : 50) + (hint && !hint.hidden ? hint.offsetHeight : 0) + 48;
+        H = Math.max(260, Math.round((window.innerHeight || 700) - reserve));
+      }
       svg.attr('viewBox', `0 0 ${W} ${H}`).attr('height', H);
       if (!bands.length) {
         svg.append('text').attr('x', 0).attr('y', 24).style('fill', 'var(--color-fg-muted)').text('这个周期还没有预测');
         svg.attr('aria-label', '暂无预测');
         return;
       }
+      // 历史 K 线只留约 1.2 倍预测长度（至少 24 根），让未来部分占主要画面
+      const nHist = Math.max(24, Math.round((bands.length - 1) * 1.2));
+      const histAll = acts.filter((r) => r.d <= bands[0].d);
+      if (histAll.length > nHist) { const from = histAll[histAll.length - nHist].d; acts = acts.filter((r) => r.d >= from); }
+
       const pf = fx.priceFmt(sel.asset);
       const anchor = bands[0].d;
+      const pos = fx.POSITION[sel.asset];
       const LD = dash.data(sel.asset === 'BTC' ? 'live_btc' : 'live_sol');
       const tk = LD.status === 'ok' && Array.isArray(LD.data) && LD.data[0] && Number.isFinite(LD.data[0].last) ? LD.data[0] : null;
       const tkD = tk ? fx.parse(tk.time_bj.slice(0, 16)) : null;
@@ -458,101 +532,123 @@
         acts = acts.map((r) => (r.live && `${r.t}:00` >= tk.time_bj
           ? { ...r, close: tk.last, high: Math.max(r.high, tk.last), low: Math.min(r.low, tk.last) } : r));
       }
-      const pos = fx.POSITION[sel.asset];
-      const t0 = d3.min([...acts.map((r) => r.d), anchor]);
-      const t1 = d3.max([...acts.map((r) => r.d), bands[bands.length - 1].d]);
-      let lo = d3.min([...acts.map((r) => r.low), ...bands.map((b) => b.q05), ...(tk ? [tk.last] : [])]);
-      let hi = d3.max([...acts.map((r) => r.high), ...bands.map((b) => b.q95), ...(tk ? [tk.last] : [])]);
-      if (pos) { lo = Math.min(lo, ...pos.sl); hi = Math.max(hi, ...pos.tp); }
-      const pad = (hi - lo) * 0.04; lo -= pad; hi += pad;
-
-      const y = d3.scaleLinear().domain([lo, hi]).nice(6);
-      // 右侧价格轴：先量最宽的刻度标签
-      const ticks = y.ticks(W < 420 ? 5 : 7);
-      const probe = svg.append('g').attr('class', 'fx-axis');
-      let maxW = 0;
-      ticks.forEach((v) => { const t = probe.append('text').text(pf(v)); maxW = Math.max(maxW, t.node().getComputedTextLength()); });
-      probe.remove();
-      const M = { top: 12, right: Math.ceil(maxW) + 10, bottom: 26, left: 4 };
-      y.range([H - M.bottom, M.top]);
-      const x = d3.scaleUtc().domain([new Date(+t0 - step * 0.8), new Date(+t1 + step * 0.8)]).range([M.left, W - M.right]);
-      const bw = Math.max(1, Math.min(14, (x(new Date(+t0 + step)) - x(t0)) * 0.62));
-
-      svg.attr('aria-label', `${sel.asset} ${fx.SCALE_LABEL[sel.scale]} 实际 K 线与预测区间，预测从 ${bands[0].t} 开始`);
-      const g = svg.append('g');
-      g.append('g').attr('class', 'fx-grid').selectAll('line').data(ticks).join('line')
-        .attr('x1', M.left).attr('x2', W - M.right).attr('y1', (v) => y(v)).attr('y2', (v) => y(v));
-      const yAxis = g.append('g').attr('class', 'fx-axis').attr('transform', `translate(${W - M.right},0)`)
-        .call(d3.axisRight(y).tickValues(ticks).tickFormat(pf).tickSize(4));
-      yAxis.select('.domain').remove();
       const liveBar = acts.find((r) => r.live);
       const nowPrice = tk ? tk.last : (liveBar ? liveBar.close : null);
-      if (nowPrice != null) yAxis.selectAll('.tick').filter((v) => Math.abs(y(v) - y(nowPrice)) < 14).select('text').style('opacity', 0);
-      const nX = W < 420 ? 3 : 5;
+
+      // 价格范围：可见部分的 K 线、预测区间、现价；没有缩放时也包含持仓线
+      const yRange = (d0, d1, withPos) => {
+        const vA = acts.filter((r) => r.d >= d0 && r.d <= d1);
+        const vB = bands.filter((b) => b.d >= d0 && b.d <= d1);
+        let lo = d3.min([...vA.map((r) => r.low), ...vB.map((b) => b.q05), ...(nowPrice != null ? [nowPrice] : [])]);
+        let hi = d3.max([...vA.map((r) => r.high), ...vB.map((b) => b.q95), ...(nowPrice != null ? [nowPrice] : [])]);
+        if (lo == null || hi == null) { lo = d3.min(bands, (b) => b.q05); hi = d3.max(bands, (b) => b.q95); }
+        if (withPos && pos) { lo = Math.min(lo, ...pos.sl); hi = Math.max(hi, ...pos.tp); }
+        const pad = (hi - lo) * 0.05 || hi * 0.001;
+        return [lo - pad, hi + pad];
+      };
+      const t0 = d3.min([...acts.map((r) => r.d), anchor]);
+      const t1 = d3.max([...acts.map((r) => r.d), bands[bands.length - 1].d]);
+      const domain0 = [new Date(+t0 - step * 0.8), new Date(+t1 + step * 0.8)];
+
+      // 右侧价格轴宽度：按全范围最宽的刻度标签量
+      const yAll = d3.scaleLinear().domain(yRange(domain0[0], domain0[1], true)).nice(6);
+      const probe = svg.append('g').attr('class', 'fx-axis');
+      let maxW = 0;
+      yAll.ticks(7).forEach((v) => { const t = probe.append('text').text(pf(v)); maxW = Math.max(maxW, t.node().getComputedTextLength()); });
+      probe.remove();
+      const M = { top: 12, right: Math.ceil(maxW) + 12, bottom: 26, left: 4 };
+      const x0 = d3.scaleUtc().domain(domain0).range([M.left, W - M.right]);
+
+      svg.attr('aria-label', `${sel.asset} ${fx.SCALE_LABEL[sel.scale]} 实际 K 线与预测区间，预测从 ${bands[0].t} 开始`);
+      const clipId = `fx-clip-${sel.key}`;
+      svg.append('defs').append('clipPath').attr('id', clipId).append('rect')
+        .attr('x', M.left).attr('y', 0).attr('width', W - M.left - M.right).attr('height', H - M.bottom);
+      const layer = svg.append('g');
+      const overlay = svg.append('rect').attr('x', M.left).attr('y', M.top).attr('width', W - M.left - M.right)
+        .attr('height', H - M.top - M.bottom).style('fill', 'transparent').style('cursor', 'crosshair');
+
+      const up = 'var(--color-ok)', down = 'var(--color-bad)', color = dash.colors[0];
       const xFmt = d3.utcFormat(sel.scale === '1d' ? '%m-%d' : (sel.scale === '15m' ? '%d日%H:%M' : '%m-%d %H时'));
-      g.append('g').attr('class', 'fx-axis').attr('transform', `translate(0,${H - M.bottom})`)
-        .call(d3.axisBottom(x).ticks(nX).tickFormat(xFmt).tickSizeOuter(0));
+      let x = x0, y = yAll, cursor = null;
 
-      const color = dash.colors[0];
-      const area = (a, b) => d3.area().x((r) => x(r.d)).y0((r) => y(r[a])).y1((r) => y(r[b]));
-      g.append('path').datum(bands).attr('d', area('q05', 'q95')).style('fill', color).style('opacity', 0.16);
-      g.append('path').datum(bands).attr('d', area('q25', 'q75')).style('fill', color).style('opacity', 0.32);
-      g.append('path').datum(bands).attr('d', d3.line().x((r) => x(r.d)).y((r) => y(r.q50)))
-        .style('fill', 'none').style('stroke', color).style('stroke-width', 1.6).style('stroke-dasharray', '5 4');
+      const paint = () => {
+        layer.selectAll('*').remove();
+        x = made.zt.rescaleX(x0);
+        const zoomed = made.zt.k > 1.001;
+        const [d0, d1] = x.domain();
+        y = d3.scaleLinear().domain(yRange(d0, d1, !zoomed)).nice(6).range([H - M.bottom, M.top]);
+        const ticks = y.ticks(H < 360 ? 5 : 7);
+        layer.append('g').attr('class', 'fx-grid').selectAll('line').data(ticks).join('line')
+          .attr('x1', M.left).attr('x2', W - M.right).attr('y1', (v) => y(v)).attr('y2', (v) => y(v));
+        const yAxis = layer.append('g').attr('class', 'fx-axis').attr('transform', `translate(${W - M.right},0)`)
+          .call(d3.axisRight(y).tickValues(ticks).tickFormat(pf).tickSize(4));
+        yAxis.select('.domain').remove();
+        if (nowPrice != null) yAxis.selectAll('.tick').filter((v) => Math.abs(y(v) - y(nowPrice)) < 14).select('text').style('opacity', 0);
+        layer.append('g').attr('class', 'fx-axis').attr('transform', `translate(0,${H - M.bottom})`)
+          .call(d3.axisBottom(x).ticks(W < 420 ? 3 : (W < 800 ? 5 : 8)).tickFormat(xFmt).tickSizeOuter(0));
 
-      g.append('line').attr('x1', x(anchor)).attr('x2', x(anchor)).attr('y1', M.top).attr('y2', H - M.bottom)
-        .style('stroke', 'var(--cds-chart-reference)').style('stroke-dasharray', '2 3');
-      g.append('text').attr('x', x(anchor) + 4).attr('y', M.top + 10).style('fill', 'var(--cds-text-secondary)')
-        .style('font-size', 'var(--cds-font-size-caption)').text('预测起点');
+        const plot = layer.append('g').attr('clip-path', `url(#${clipId})`);
+        const area = (a, b) => d3.area().x((r) => x(r.d)).y0((r) => y(r[a])).y1((r) => y(r[b]));
+        plot.append('path').datum(bands).attr('d', area('q05', 'q95')).style('fill', color).style('opacity', 0.16);
+        plot.append('path').datum(bands).attr('d', area('q25', 'q75')).style('fill', color).style('opacity', 0.32);
+        plot.append('path').datum(bands).attr('d', d3.line().x((r) => x(r.d)).y((r) => y(r.q50)))
+          .style('fill', 'none').style('stroke', color).style('stroke-width', 1.6).style('stroke-dasharray', '5 4');
+        plot.append('line').attr('x1', x(anchor)).attr('x2', x(anchor)).attr('y1', M.top).attr('y2', H - M.bottom)
+          .style('stroke', 'var(--cds-chart-reference)').style('stroke-dasharray', '2 3');
+        plot.append('text').attr('x', x(anchor) + 4).attr('y', M.top + 10).style('fill', 'var(--cds-text-secondary)')
+          .style('font-size', 'var(--cds-font-size-caption)').text('预测起点');
 
-      if (pos) {
-        const lines = [
-          ...pos.tp.map((v) => ({ v, c: 'var(--color-ok)', dash: '6 4' })),
-          { v: pos.entry, c: 'var(--cds-chart-reference)', dash: null },
-          ...pos.sl.map((v) => ({ v, c: 'var(--color-bad)', dash: '6 4' })),
-        ];
-        lines.forEach((l) => g.append('line').attr('x1', M.left).attr('x2', W - M.right).attr('y1', y(l.v)).attr('y2', y(l.v))
-          .style('stroke', l.c).style('stroke-width', 1).style('stroke-dasharray', l.dash).style('opacity', 0.9));
-        const labels = [
-          { v: Math.max(...pos.tp), text: `止盈 ${pos.tp.join(' / ')}`, c: 'var(--color-ok)', dy: -4 },
-          { v: pos.entry, text: `开仓 ${pos.entry}`, c: 'var(--color-fg-muted)', dy: -4 },
-          { v: Math.min(...pos.sl), text: `止损 ${pos.sl.join(' / ')}`, c: 'var(--color-bad)', dy: 12 },
-        ];
-        labels.forEach((l) => g.append('text').attr('x', M.left + 2).attr('y', y(l.v) + l.dy)
-          .style('fill', l.c).style('font-size', 'var(--cds-font-size-caption)').text(l.text));
-      }
-
-      const up = 'var(--color-ok)', down = 'var(--color-bad)';
-      const c = g.append('g').selectAll('g').data(acts).join('g')
-        .style('opacity', (r) => (r.d <= anchor ? 0.45 : 1));
-      c.append('line').attr('x1', (r) => x(r.d)).attr('x2', (r) => x(r.d)).attr('y1', (r) => y(r.high)).attr('y2', (r) => y(r.low))
-        .style('stroke', (r) => (r.close >= r.open ? up : down)).style('stroke-width', 1);
-      c.append('rect').attr('x', (r) => x(r.d) - bw / 2).attr('width', bw)
-        .attr('y', (r) => y(Math.max(r.open, r.close))).attr('height', (r) => Math.max(1, Math.abs(y(r.open) - y(r.close))))
-        .style('fill', (r) => (r.live ? 'none' : (r.close >= r.open ? up : down)))
-        .style('stroke', (r) => (r.close >= r.open ? up : down)).style('stroke-width', (r) => (r.live ? 1.4 : 0));
-
-      if (nowPrice != null) {
-        g.append('line').attr('x1', M.left).attr('x2', W - M.right).attr('y1', y(nowPrice)).attr('y2', y(nowPrice))
-          .style('stroke', 'var(--color-fg)').style('stroke-width', 0.8).style('stroke-dasharray', '1 3');
-        if (tkD && tkD >= x.domain()[0] && tkD <= x.domain()[1]) {
-          g.append('circle').attr('cx', x(tkD)).attr('cy', y(nowPrice)).attr('r', 3.5)
-            .style('fill', 'var(--color-fg)').style('stroke', 'var(--color-bg)').style('stroke-width', 1.5);
+        if (pos) {
+          const [ylo, yhi] = y.domain();
+          const inView = (v) => v >= ylo && v <= yhi;
+          const lines = [
+            ...pos.tp.map((v) => ({ v, c: 'var(--color-ok)', dash: '6 4' })),
+            { v: pos.entry, c: 'var(--cds-chart-reference)', dash: null },
+            ...pos.sl.map((v) => ({ v, c: 'var(--color-bad)', dash: '6 4' })),
+          ].filter((l) => inView(l.v));
+          lines.forEach((l) => plot.append('line').attr('x1', M.left).attr('x2', W - M.right).attr('y1', y(l.v)).attr('y2', y(l.v))
+            .style('stroke', l.c).style('stroke-width', 1).style('stroke-dasharray', l.dash).style('opacity', 0.9));
+          [
+            { v: Math.max(...pos.tp), text: `止盈 ${pos.tp.join(' / ')}`, c: 'var(--color-ok)', dy: -4 },
+            { v: pos.entry, text: `开仓 ${pos.entry}`, c: 'var(--color-fg-muted)', dy: -4 },
+            { v: Math.min(...pos.sl), text: `止损 ${pos.sl.join(' / ')}`, c: 'var(--color-bad)', dy: 12 },
+          ].filter((l) => inView(l.v)).forEach((l) => plot.append('text').attr('x', M.left + 2).attr('y', y(l.v) + l.dy)
+            .style('fill', l.c).style('font-size', 'var(--cds-font-size-caption)').text(l.text));
         }
-        const tag = g.append('g').attr('transform', `translate(${W - M.right},${y(nowPrice)})`);
-        const label = tag.append('text').attr('x', 6).attr('dy', '0.35em').style('fill', 'var(--color-bg)')
-          .style('font-size', 'var(--cds-font-size-caption)').style('font-weight', 'var(--cds-font-weight-medium)').text(pf(nowPrice));
-        const bb = label.node().getBBox();
-        tag.insert('rect', 'text').attr('x', 2).attr('y', bb.y - 2).attr('width', bb.width + 8).attr('height', bb.height + 4)
-          .attr('rx', 3).style('fill', 'var(--color-fg)');
-      }
+
+        const bw = Math.max(1, Math.min(full ? 22 : 14, (x(new Date(+t0 + step)) - x(t0)) * 0.62));
+        const c = plot.append('g').selectAll('g').data(acts).join('g')
+          .style('opacity', (r) => (r.d <= anchor ? 0.45 : 1));
+        c.append('line').attr('x1', (r) => x(r.d)).attr('x2', (r) => x(r.d)).attr('y1', (r) => y(r.high)).attr('y2', (r) => y(r.low))
+          .style('stroke', (r) => (r.close >= r.open ? up : down)).style('stroke-width', 1);
+        c.append('rect').attr('x', (r) => x(r.d) - bw / 2).attr('width', bw)
+          .attr('y', (r) => y(Math.max(r.open, r.close))).attr('height', (r) => Math.max(1, Math.abs(y(r.open) - y(r.close))))
+          .style('fill', (r) => (r.live ? 'none' : (r.close >= r.open ? up : down)))
+          .style('stroke', (r) => (r.close >= r.open ? up : down)).style('stroke-width', (r) => (r.live ? 1.4 : 0));
+
+        if (nowPrice != null) {
+          plot.append('line').attr('x1', M.left).attr('x2', W - M.right).attr('y1', y(nowPrice)).attr('y2', y(nowPrice))
+            .style('stroke', 'var(--color-fg)').style('stroke-width', 0.8).style('stroke-dasharray', '1 3');
+          if (tkD) {
+            plot.append('circle').attr('cx', x(tkD)).attr('cy', y(nowPrice)).attr('r', 3.5)
+              .style('fill', 'var(--color-fg)').style('stroke', 'var(--color-bg)').style('stroke-width', 1.5);
+          }
+          const tag = layer.append('g').attr('transform', `translate(${W - M.right},${y(nowPrice)})`);
+          const label = tag.append('text').attr('x', 6).attr('dy', '0.35em').style('fill', 'var(--color-bg)')
+            .style('font-size', 'var(--cds-font-size-caption)').style('font-weight', 'var(--cds-font-weight-medium)').text(pf(nowPrice));
+          const bb = label.node().getBBox();
+          tag.insert('rect', 'text').attr('x', 2).attr('y', bb.y - 2).attr('width', bb.width + 8).attr('height', bb.height + 4)
+            .attr('rx', 3).style('fill', 'var(--color-fg)');
+        }
+        cursor = layer.append('line').attr('y1', M.top).attr('y2', H - M.bottom).style('stroke', 'var(--color-fg-muted)')
+          .style('stroke-width', 1).style('opacity', 0);
+      };
+      paint();
 
       // 点按 / 拖动看数值
       const times = Array.from(new Set([...acts.map((r) => +r.d), ...bands.map((b) => +b.d)])).sort((a, b) => a - b);
       const byA = new Map(acts.map((r) => [+r.d, r]));
       const byB = new Map(bands.map((b) => [+b.d, b]));
-      const cursor = g.append('line').attr('y1', M.top).attr('y2', H - M.bottom).style('stroke', 'var(--color-fg-muted)')
-        .style('stroke-width', 1).style('opacity', 0);
       const tf = d3.utcFormat('%m-%d %H:%M');
       const show = (event) => {
         const [px] = d3.pointer(event, svg.node());
@@ -572,16 +668,24 @@
           tip.append('div').attr('class', 'fx-tip-muted').text('预测起点');
         }
         tip.attr('hidden', null);
-        const tw = tip.node().offsetWidth, th = tip.node().offsetHeight;
-        const cx = x(new Date(k)) / W * el.clientWidth;
-        let left = cx + 12; if (left + tw > el.clientWidth) left = cx - tw - 12;
-        tip.style('left', `${Math.max(0, left)}px`).style('top', `${Math.max(0, M.top)}px`);
-        if (th > H) tip.style('top', '0px');
+        const cw = el.clientWidth || W;
+        const tw = tip.node().offsetWidth;
+        const cx = x(new Date(k)) / W * cw;
+        let left = cx + 12; if (left + tw > cw) left = cx - tw - 12;
+        tip.style('left', `${Math.max(0, left)}px`).style('top', `${M.top}px`);
       };
-      svg.append('rect').attr('x', M.left).attr('y', M.top).attr('width', W - M.left - M.right).attr('height', H - M.top - M.bottom)
-        .style('fill', 'transparent').style('cursor', 'crosshair')
-        .on('pointermove', show).on('pointerdown', show)
-        .on('pointerleave', () => { cursor.style('opacity', 0); tip.attr('hidden', ''); });
+      overlay.on('pointermove', show).on('pointerdown', show)
+        .on('pointerleave', () => { if (cursor) cursor.style('opacity', 0); tip.attr('hidden', ''); });
+
+      // 全屏时：双指 / 滚轮缩放，拖动平移（只缩放时间轴）
+      if (full) {
+        const zoom = d3.zoom().scaleExtent([1, 12])
+          .extent([[M.left, 0], [W - M.right, H]]).translateExtent([[M.left, 0], [W - M.right, H]])
+          .on('zoom', (event) => { made.zt = event.transform; tip.attr('hidden', ''); paint(); overlay.raise(); });
+        overlay.call(zoom).on('dblclick.zoom', null);
+        overlay.property('__zoom', made.zt);
+      }
+      overlay.raise();
     },
   });
 </script>
