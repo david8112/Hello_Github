@@ -31,6 +31,14 @@ age_hours() {   # 某个品种 × 周期最新预测文件的年龄（小时）�
   if [ -z "$f" ]; then echo 9999; else echo $(( ($(date +%s) - $(stat -c %Y "$f")) / 3600 )); fi
 }
 
+wait_hist() {   # 历史样本外预测（hist_eval.py）正在算的那一个先让它算完；它看到本脚本持有锁就会暂停，不会再开新的
+  local i
+  for i in $(seq 1 90); do
+    [ -f /tmp/kit-hist.busy ] && kill -0 "$(cat /tmp/kit-hist.busy 2>/dev/null)" 2>/dev/null || break
+    sleep 10
+  done
+}
+
 if [ "$MODE" = "auto" ] || [ "$MODE" = "force" ]; then
   exec 9>/tmp/kit-dashboard.lock
   flock -n 9 || { echo "上一次刷新还在运行，这次跳过"; exit 0; }
@@ -47,6 +55,7 @@ if [ "$MODE" = "auto" ] || [ "$MODE" = "force" ]; then
       elif [ "$age" -ge "$max_age" ]; then due=1; fi
       if [ "$due" = 1 ]; then
         echo "== 重跑 $code $scale（上次预测 ${age} 小时前）"
+        wait_hist
         $PY fetch_crypto.py --exchange okx --swap --symbol "$code" --interval "$scale" >/dev/null &&
         $PY forecast.py --market crypto --code "$code" --scale "$scale" --file "data_crypto/${code}_${scale}_okx_swap.csv" \
             --paths "$paths" --precision bf16 --ctx-show 120 | grep -E "中位数|历史截至" || echo "   $code $scale 预测失败"
