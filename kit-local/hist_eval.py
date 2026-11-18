@@ -53,7 +53,7 @@ def need_bars(cfg, scale: str, days: float) -> int:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--scales", default="1h,2h")
+    ap.add_argument("--scales", default="1h,2h", help="逗号分隔；写成 15m/2 表示这个周期每 2 个起点才跑一次")
     ap.add_argument("--start", required=True, help="最早起点（UTC）")
     ap.add_argument("--end", required=True, help="最晚起点（UTC），应早于实盘存档开始的时间")
     ap.add_argument("--max-anchors", type=int, default=10**6)
@@ -67,7 +67,8 @@ def main() -> None:
     os.nice(5)
     if args.threads:
         torch.set_num_threads(args.threads)
-    scales = [s.strip() for s in args.scales.split(",") if s.strip()]
+    every = {s.split("/")[0].strip(): int(s.split("/")[1]) if "/" in s else 1 for s in args.scales.split(",") if s.strip()}
+    scales = list(every)
     start, end = pd.Timestamp(args.start), pd.Timestamp(args.end)
     args.out.mkdir(parents=True, exist_ok=True)
 
@@ -93,8 +94,8 @@ def main() -> None:
 
     anchors = pd.date_range(start.ceil("2h"), end.floor("2h"), freq="2h")
     anchors = anchors[np.random.default_rng(args.order_seed).permutation(len(anchors))][:args.max_anchors]
-    todo = [(a, code, scale) for a in anchors for scale in scales for code in CODES]
-    print(f"{len(anchors)} 个起点 × {len(scales)} 个周期 × {len(CODES)} 个品种 = {len(todo)} 个预测", flush=True)
+    todo = [(a, code, scale) for i, a in enumerate(anchors) for scale in scales if i % every[scale] == 0 for code in CODES]
+    print(f"{len(anchors)} 个起点，周期 {every}，{len(CODES)} 个品种，共 {len(todo)} 个预测", flush=True)
     done = 0
     for a, code, scale in todo:
         tag = f"{code}_{scale}_{F.to_display(a, 'crypto'):%Y%m%d_%H%M}"
