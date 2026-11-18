@@ -127,7 +127,8 @@ def read_forecast(f: Path, lag: dict | None) -> dict | None:
                 o=z["pred_open"].astype(float), h=z["pred_high"].astype(float), l=z["pred_low"].astype(float), c=c)
 
 
-def build(src: Path, dst: Path, lag: dict | None, publish_min: float = 2.0, quiet: bool = False) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
+def build(src: Path, dst: Path, lag: dict | None, publish_min: float = 2.0, quiet: bool = False,
+          bars_from: pd.Timestamp | None = None) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
     dst.mkdir(parents=True, exist_ok=True)
     fcs = [r for r in (read_forecast(f, lag) for f in sorted(src.glob("[!.]*.npz"))) if r is not None]
     if not fcs:
@@ -137,7 +138,8 @@ def build(src: Path, dst: Path, lag: dict | None, publish_min: float = 2.0, quie
     for asset in sorted({r["asset"] for r in fcs}):
         for scale in ("1m",) + SCALES:
             p = dst / f"bars_{asset}_{scale}.parquet"
-            bars[(asset, scale)] = update_bars(p, asset, scale, (first - pd.Timedelta(days=HIST_DAYS[scale])).floor("D"))
+            start = (first - pd.Timedelta(days=HIST_DAYS[scale])).floor("D")
+            bars[(asset, scale)] = update_bars(p, asset, scale, start if bars_from is None else min(start, bars_from))
             if not quiet:
                 b = bars[(asset, scale)]
                 print(f"  bars {asset} {scale}: {len(b)} 根  {b.t.min()} .. {b.t.max()}")
@@ -218,11 +220,13 @@ def main() -> None:
     ap.add_argument("--dst", type=Path, default=HERE / "outputs" / "eval" / "live")
     ap.add_argument("--lag", default=None, help="历史样本外预测用：假设起点收盘后多少分钟能看到预测，如 '15m=15,1h=8,2h=15' 或 '*=10'（实盘存档不要给）")
     ap.add_argument("--publish-min", type=float, default=2.0, help="实盘存档：一批预测全部算完后，到看板更新完成还要几分钟")
+    ap.add_argument("--bars-from", default=None, help="实际 K 线至少从这个 UTC 时间开始取（默认只取到最早预测起点之前一点）")
     ap.add_argument("--split", default=None, help="UTC 时间，如 '2026-11-17 12:00'：另外写 train/（之前生成的预测 + 之前的实际）和 holdout/")
     args = ap.parse_args()
 
     lag = None if args.lag is None else {k.strip(): float(v) for k, v in (x.split("=") for x in args.lag.split(","))}
-    F, P, bars = build(args.src, args.dst, lag, args.publish_min)
+    F, P, bars = build(args.src, args.dst, lag, args.publish_min,
+                       bars_from=None if args.bars_from is None else pd.Timestamp(args.bars_from))
     F.to_parquet(args.dst / "forecasts.parquet", index=False)
     P.to_parquet(args.dst / "pairs.parquet", index=False)
     d = P[P.done]
