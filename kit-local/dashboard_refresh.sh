@@ -32,9 +32,11 @@ age_hours() {   # 某个品种 × 周期最新预测文件的年龄（小时）�
 }
 
 wait_hist() {   # 历史样本外预测（hist_eval.py）正在算的那一个先让它算完；它看到本脚本持有锁就会暂停，不会再开新的
-  local i
+  local i pid
   for i in $(seq 1 90); do
-    [ -f /tmp/kit-hist.busy ] && kill -0 "$(cat /tmp/kit-hist.busy 2>/dev/null)" 2>/dev/null || break
+    pid=$(cat /tmp/kit-hist.busy 2>/dev/null) || break
+    # 容器重启后 /tmp 里的旧文件还在，进程号可能被别的进程占用：只认真的 hist_eval 进程
+    [ -n "$pid" ] && grep -qa "hist_eval" "/proc/$pid/cmdline" 2>/dev/null || { rm -f /tmp/kit-hist.busy; break; }
     sleep 10
   done
 }
