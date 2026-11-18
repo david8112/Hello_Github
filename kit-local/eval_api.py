@@ -9,7 +9,8 @@
     ds.paths(fid)                                 # 原始路径：close/open/high/low (paths, bars)、fut_ts、prev_close
     ds.bars("SOL", "15m")                         # 截止时间之前已经收盘的实际 K 线（1m/15m/1h/2h/1d）
     ds.last_price("SOL", t)                       # t 时刻最近一根已收盘 1 分钟线的收盘价（t 默认 now）
-    ds.at(t)                                      # 截止时间提前到 t 的视图
+    ds.at(t)                                      # 截止时间提前到 t 的视图（t 不能晚于当前视图的 now，否则报错）
+    ds.end                                        # 当前视图里最后一根 1 分钟线的收盘时间（不是整份数据的结尾）
 
 策略文件约定（见 strategies/ 下的例子）:
     NAME = "..."; DESCRIPTION = "..."; PARAMS = {...}       # 参数写死在 PARAMS 里
@@ -29,6 +30,7 @@ from eval_dataset import load_paths
 PRED_COLS = ["fid", "asset", "scale", "anchor", "made_at", "visible_at", "lead", "t", "lead_min", "prev_close",
              "q05", "q10", "q25", "q50", "q75", "q90", "q95", "mean", "std", "p_up",
              "hi_q50", "hi_q95", "lo_q05", "lo_q50", "cummax_q50", "cummin_q50"]
+HIDDEN_F = ("n_done", "entry_t", "entry_px", "entry_t_vis", "entry_px_vis")      # 由之后的实际行情算出来的列，策略不能看
 
 
 def _ns(s: pd.Series) -> pd.Series:
@@ -43,6 +45,7 @@ class Dataset:
 
     def _load(self) -> dict:
         F = pd.read_parquet(self.dir / "forecasts.parquet")
+        F = F.drop(columns=[c for c in HIDDEN_F if c in F.columns])
         for col in ("anchor", "made_at", "visible_at", "end"):
             F[col] = _ns(F[col])
         P = pd.read_parquet(self.dir / "pairs.parquet", columns=PRED_COLS)
@@ -62,8 +65,12 @@ class Dataset:
 
     @property
     def end(self) -> pd.Timestamp:
-        """数据里最后一根 1 分钟线的收盘时间。"""
-        return self._c["end"]
+        """当前视图里最后一根 1 分钟线的收盘时间（视图被截断时不会透露整份数据的结尾）。"""
+        if self.now >= self._c["end"]:
+            return self._c["end"]
+        now = self.now.as_unit("ns").value
+        last = [int(ts[i - 1]) for ts, _ in self._c["m1"].values() if (i := int(np.searchsorted(ts, now, side="right"))) > 0]
+        return pd.Timestamp(max(last)) if last else pd.NaT
 
     @property
     def assets(self) -> list:
@@ -72,8 +79,7 @@ class Dataset:
     @property
     def forecasts(self) -> pd.DataFrame:
         F = self._c["F"]
-        cols = [c for c in F.columns if c not in ("n_done", "entry_t", "entry_px", "entry_t_vis", "entry_px_vis")]
-        return F.loc[F["visible_at"] <= self.now, cols].reset_index(drop=True)
+        return F[F["visible_at"] <= self.now].reset_index(drop=True)
 
     @property
     def pairs(self) -> pd.DataFrame:
@@ -85,7 +91,10 @@ class Dataset:
         r = F[F["fid"] == fid]
         if not len(r) or r["visible_at"].iloc[0] > self.now:
             raise KeyError(f"{fid} 在 {self.now} 还看不到")
-        return load_paths(r["file"].iloc[0], float(r["rebase"].iloc[0]) if "rebase" in r else 1.0)
+        f = Path(r["file"].iloc[0])
+        if not f.is_absolute() and not f.exists():                # 历史样本外数据集里存的是相对路径：不在项目目录下运行时也能找到
+            f = Path(__file__).resolve().parent / f
+        return load_paths(f, float(r["rebase"].iloc[0]) if "rebase" in r else 1.0)
 
     def bars(self, asset: str, scale: str) -> pd.DataFrame:
         b = self._c["bars"][(asset, scale)]
@@ -100,4 +109,22 @@ class Dataset:
         return float(close[i]) if i >= 0 else float("nan")
 
     def at(self, now) -> "Dataset":
+        now = pd.Timestamp(now)
+        if now > self.now:
+            raise ValueError(f"at({now}) 晚于当前视图的截止时间 {self.now}：视图只能往前截，不能往后看")
         return Dataset(self.dir, now, _cache=self._c)
+
+    def cut(self, now) -> "Dataset":
+        """和 at(now) 看到的内容相同，但连内部缓存也截断到 now：之后的预测和 K 线在返回的对象里根本不存在。
+        eval_run 的偷看检查用它，这样策略即使绕过接口（ds.end、ds.at(更晚的时间)、ds._c）也拿不到未来数据。"""
+        now = pd.Timestamp(now)
+        if now > self.now:
+            raise ValueError(f"cut({now}) 晚于当前视图的截止时间 {self.now}")
+        c, t_ns = self._c, now.as_unit("ns").value
+        bars = {k: b[b["t"] <= now].reset_index(drop=True) for k, b in c["bars"].items()}
+        m1 = {a: (ts[:(n := int(np.searchsorted(ts, t_ns, side="right")))].copy(), px[:n].copy()) for a, (ts, px) in c["m1"].items()}
+        last = [int(ts[-1]) for ts, _ in m1.values() if len(ts)]
+        cache = dict(F=c["F"][c["F"]["visible_at"] <= now].reset_index(drop=True),
+                     P=c["P"][c["P"]["visible_at"] <= now].reset_index(drop=True),
+                     bars=bars, m1=m1, end=pd.Timestamp(max(last)) if last else pd.NaT)
+        return Dataset(self.dir / "__cut__", now, _cache=cache)      # 目录也换成不存在的：直接读数据文件的策略在检查里会报错

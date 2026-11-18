@@ -33,6 +33,45 @@ def load_strategy(path: Path):
     return mod
 
 
+def _utc_naive(x) -> pd.DatetimeIndex:
+    """时间列统一成不带时区的 UTC 纳秒（带时区的先换算到 UTC 再去掉时区）。"""
+    t = pd.DatetimeIndex(pd.to_datetime(x))
+    if t.tz is not None:
+        t = t.tz_convert("UTC").tz_localize(None)
+    return t.as_unit("ns")
+
+
+def _ts(x) -> pd.Timestamp:
+    t = pd.Timestamp(x)
+    return t.tz_convert("UTC").tz_localize(None) if t.tzinfo is not None else t
+
+
+def parse_set(params: dict, kv: str) -> tuple:
+    """--set name=value：name 必须是 PARAMS 里已有的参数；value 按原参数的类型解析（布尔认 true/false/1/0，
+    None、列表、字典按 JSON）。写错名字或类型直接报错，免得"改了参数"其实没改。"""
+    if "=" not in kv:
+        raise SystemExit(f"--set 要写成 name=value，收到的是 {kv!r}")
+    k, v = kv.split("=", 1)
+    k, v = k.strip(), v.strip()
+    if k not in params:
+        raise SystemExit(f"--set {k}=...：PARAMS 里没有这个参数（有的是 {sorted(params)}）")
+    old = params[k]
+    try:
+        if isinstance(old, bool):
+            if v.lower() not in ("true", "false", "1", "0"):
+                raise ValueError("布尔参数只认 true/false/1/0")
+            return k, v.lower() in ("true", "1")
+        if isinstance(old, int):
+            return k, int(v)
+        if isinstance(old, float):
+            return k, float(v)
+        if isinstance(old, str):
+            return k, v
+        return k, json.loads(v)                                   # None / 列表 / 字典：按 JSON
+    except (ValueError, json.JSONDecodeError) as e:
+        raise SystemExit(f"--set {k}={v!r} 解析不了（原值 {old!r}，类型 {type(old).__name__}）：{e}") from None
+
+
 def run_signals(mod, ds: Dataset, params: dict) -> pd.DataFrame:
     S = mod.signals(ds, **params)
     S = pd.DataFrame(S).copy() if S is not None else pd.DataFrame()
@@ -46,10 +85,10 @@ def run_signals(mod, ds: Dataset, params: dict) -> pd.DataFrame:
         S["tag"] = ""
     S["side"] = S["side"].astype(int)
     for col in ("entry_time", "exit_time"):
-        S[col] = pd.DatetimeIndex(pd.to_datetime(S[col])).as_unit("ns")
-    bad = S[(S["exit_time"] <= S["entry_time"]) | ~S["side"].isin([-1, 1]) | ~S["asset"].isin(ds.assets)]
+        S[col] = _utc_naive(S[col])
+    bad = S[~(S["exit_time"] > S["entry_time"]) | ~S["side"].isin([-1, 1]) | ~S["asset"].isin(ds.assets)]
     if len(bad):
-        raise SystemExit(f"策略输出了 {len(bad)} 行非法信号（到期不晚于进场 / side 不是 ±1 / 品种不认识）")
+        raise SystemExit(f"策略输出了 {len(bad)} 行非法信号（时间缺失或到期不晚于进场 / side 不是 ±1 / 品种不认识）")
     return S.sort_values(["entry_time", "asset"]).reset_index(drop=True)
 
 
@@ -60,14 +99,23 @@ def canon(S: pd.DataFrame) -> set:
 
 
 def causality(mod, ds: Dataset, params: dict, full: pd.DataFrame, n_cuts: int = 12) -> dict:
-    """把数据截断在若干个进场时刻重跑策略：截断时刻及之前发出的信号必须和完整数据上的完全一致。"""
+    """把数据截断在若干个进场时刻重跑策略：截断时刻及之前发出的信号必须和完整数据上的完全一致。
+    n_cuts <= 0 表示每个进场时刻都查一遍（慢，但不会漏掉只在个别信号上偷看的情况）。"""
     if not len(full):
         return dict(cuts=0, violations=0, examples=[])
     times = np.sort(full["entry_time"].unique())
-    cuts = pd.DatetimeIndex(times[np.unique(np.linspace(0, len(times) - 1, min(n_cuts, len(times))).astype(int))])
+    k = len(times) if n_cuts <= 0 else min(n_cuts, len(times))
+    cuts = pd.DatetimeIndex(times[np.unique(np.linspace(0, len(times) - 1, k).astype(int))])
     bad, examples = 0, []
+    src = getattr(mod, "__file__", None)
     for T in cuts:
-        part = run_signals(mod, ds.at(T), params)
+        try:
+            fresh = load_strategy(Path(src)) if src else mod       # 每次重新加载策略文件：完整数据那一遍留下的模块级缓存不能带过来
+            part = run_signals(fresh, ds.cut(T), params)           # cut：之后的数据在这个对象里根本不存在
+        except (Exception, SystemExit) as e:  # noqa: BLE001
+            bad += 1
+            examples.append(f"截断在 {T} 时策略报错（{type(e).__name__}: {str(e)[:120]}）")
+            continue
         if len(part) and part["entry_time"].max() > T:
             bad += 1
             examples.append(f"截断在 {T} 时策略发出了 {part['entry_time'].max()} 的信号")
@@ -99,22 +147,23 @@ def main() -> None:
     ap.add_argument("--set", action="append", default=[], help="临时覆盖 PARAMS 里的参数，如 --set hold_h=3")
     ap.add_argument("--latency", type=float, default=0.0, help="看到信号后多少分钟才下单")
     ap.add_argument("--no-causality", action="store_true")
+    ap.add_argument("--cuts", type=int, default=12, help="偷看检查截断重跑的次数（默认 12；0 = 每个进场时刻都查）")
     ap.add_argument("--out", type=Path, default=None, help="结果 JSON 和 trades.csv 写到这个目录")
     args = ap.parse_args()
 
     mod = load_strategy(args.strategy)
     params = dict(getattr(mod, "PARAMS", {}))
     for kv in args.set:
-        k, v = kv.split("=", 1)
-        params[k] = type(params[k])(v) if k in params and not isinstance(params[k], bool) else json.loads(v)
+        k, v = parse_set(params, kv)
+        params[k] = v
     ds = Dataset(args.data)
     full = run_signals(mod, ds, params)
-    caus = dict(skipped=True) if args.no_causality else causality(mod, ds, params, full)
+    caus = dict(skipped=True) if args.no_causality else causality(mod, ds, params, full, n_cuts=args.cuts)
     S = full
     if args.t_from:
-        S = S[S["entry_time"] >= pd.Timestamp(args.t_from)]
+        S = S[S["entry_time"] >= _ts(args.t_from)]
     if args.t_to:
-        S = S[S["entry_time"] < pd.Timestamp(args.t_to)]
+        S = S[S["entry_time"] < _ts(args.t_to)]
     S = S.reset_index(drop=True)
     bars = E.load_1m(args.data)
     res = dict(strategy=getattr(mod, "NAME", args.strategy.stem), file=str(args.strategy), params=params, data=str(args.data),

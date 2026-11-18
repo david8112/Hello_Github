@@ -8,13 +8,15 @@
     进场时止盈价已经在不利一侧（行情已经走过目标）则按进场价立即离场，只亏费用。
   - 费用：每边 fee_bps（OKX 永续吃单 5bp）加每边 slip_bps 滑点，进场离场各一次。不含资金费（每 8 小时一次，通常 ±1bp 量级）。
   - 收益按 1 倍名义本金、不复利：net = side * (exit/entry - 1) - 费用。杠杆只是把它乘倍数（同时放大亏损和爆仓风险）。
-  - 到期时间之后还没有行情的交易不计（dropped）。
+  - 到期时间之后还没有行情的交易不计（dropped）；进场那一分钟没有行情、要顺延 5 分钟以上才有的（信号早于 1 分钟线
+    起点，或行情缺口）也不计，不会悄悄按更晚的价格进场。
 
 统计约定:
   - 相邻信号、BTC 和 SOL、同一批预测之间高度相关，独立样本远少于笔数。block_stats 按进场时间分块（块长不短于最长持仓时间，
     至少 8 小时），对"块"做刀切法（jackknife）得到平均净收益和胜率的 90% t 区间；不足 6 块时只给点估计，不给区间。
-  - 方向基线：同样的进出场时间，全做多 / 全做空 / 按前 60 分钟动量 / 随机方向。随机方向是"每个时间簇（默认 2 小时内的
-    信号算一簇，BTC 和 SOL 同簇）抽一个方向"，不是每笔独立抽，否则基线太窄、太容易被"跑赢"。
+  - 方向基线：同样的进出场时间，全做多 / 全做空 / 按前 60 分钟动量 / 随机方向。随机方向是"每个时间簇（从簇里第一笔起
+    2 小时内的信号算一簇，持仓比 2 小时长就按最长持仓时间，BTC 和 SOL 同簇）抽一个方向"，不是每笔独立抽，否则基线太窄、
+    太容易被"跑赢"。簇少于 5 个时 p_ge 到不了 0.05（k 个簇最小只能到 1/2^k）。
 
 用法:
     import eval_engine as E
@@ -24,6 +26,7 @@
 """
 from __future__ import annotations
 
+import functools
 from pathlib import Path
 
 import numpy as np
@@ -32,6 +35,7 @@ import pandas as pd
 FEE_BPS = 5.0        # 每边吃单手续费（OKX 永续普通用户 taker 0.05%）
 SLIP_BPS = 1.5       # 每边滑点（SOL 一个最小报价单位约 1.4bp）
 MIN_BLOCKS = 6       # 少于这么多个独立时间块，不给置信区间
+MAX_ENTRY_SLIP_MIN = 5.0   # 进场那一分钟没有行情（信号早于 1 分钟线起点，或行情有缺口）时最多顺延几分钟，超过就不计
 
 
 def _ns(x) -> pd.DatetimeIndex:
@@ -88,6 +92,9 @@ def simulate(spec: pd.DataFrame, bars1m: dict, fee_bps: float = FEE_BPS, slip_bp
         t_out = pd.Timestamp(r.exit_time).ceil("min").as_unit("ns").value
         i0, i1 = int(np.searchsorted(ot, t_in, side="left")), int(np.searchsorted(ot, t_out, side="left"))
         if i0 >= len(ot) or i1 >= len(ot) or i1 <= i0:           # 到期时间之后还没有行情：这笔还没走完，不计
+            dropped += 1
+            continue
+        if ot[i0] - t_in > MAX_ENTRY_SLIP_MIN * 60_000_000_000:  # 进场时刻没有行情（早于 1 分钟线起点 / 缺口）：不能悄悄晚进场
             dropped += 1
             continue
         tp = getattr(r, "tp", np.nan)
@@ -159,13 +166,19 @@ def mtm_drawdown(T: pd.DataFrame, bars1m: dict, fee_bps: float = FEE_BPS, slip_b
     return float((np.maximum.accumulate(np.r_[0, eq]) - np.r_[0, eq]).max())
 
 
-def _t_cdf(x: float, df: int) -> float:
+@functools.lru_cache(maxsize=256)
+def _t_grid(df: int) -> tuple:
     g = np.linspace(-80, 80, 400001)
     pdf = (1 + g * g / df) ** (-(df + 1) / 2)
     cdf = np.cumsum(pdf)
-    return float(np.interp(x, g, cdf / cdf[-1]))
+    return g, cdf / cdf[-1]
 
 
+def _t_cdf(x: float, df: int) -> float:
+    return float(np.interp(x, *_t_grid(int(df))))
+
+
+@functools.lru_cache(maxsize=1024)
 def _t_ppf(p: float, df: int) -> float:
     lo, hi = -80.0, 80.0
     for _ in range(60):
@@ -209,22 +222,27 @@ def block_bootstrap(T: pd.DataFrame, block_hours: float | None = None, **_) -> d
 
 
 def _clusters(spec: pd.DataFrame, cluster_minutes: float) -> np.ndarray:
-    """进场时间相邻不超过 cluster_minutes 的信号（不分品种）归为一簇，返回每行的簇编号。"""
+    """进场时间落在同一个 cluster_minutes 窗口里的信号（不分品种）归为一簇，返回每行的簇编号。窗口从簇里第一笔的进场时间
+    算起，满 cluster_minutes 就另起一簇。（不能用"和上一笔相隔不超过 cluster_minutes 就并进去"的链式规则：每小时都有
+    信号的策略会连成一整簇，随机基线只剩"全多/全空"两种结果，p_ge 就失去意义。）"""
     t = _ns(spec["entry_time"]).asi8
     order = np.argsort(t, kind="stable")
     cid = np.zeros(len(t), int)
-    c, last = -1, None
+    c, start = -1, None
     for i in order:
-        if last is None or t[i] - last > cluster_minutes * 6e10:
+        if start is None or t[i] - start >= cluster_minutes * 6e10:
             c += 1
-        cid[i], last = c, t[i]
+            start = t[i]
+        cid[i] = c
     return cid
 
 
 def baselines(spec: pd.DataFrame, bars1m: dict, observed_avg_net: float | None = None, cluster_minutes: float = 120.0,
               n_random: int = 2000, seed: int = 0, **kw) -> dict:
     """同样的进出场时间，换方向的结果：all_long / all_short / mom60（方向 = 进场前 60 分钟涨跌）/ random（每个时间簇抽一个方向）。
-    换方向时止盈止损各自按进场价镜像。给了 observed_avg_net 时 random 里多一个 p_ge：随机方向不低于它的比例（置换检验 p 值）。"""
+    换方向时止盈止损各自按进场价镜像。给了 observed_avg_net 时 random 里多一个 p_ge：随机方向不低于它的比例（置换检验 p 值）。
+    时间簇的宽度取 max(cluster_minutes, 最长计划持仓时间)：持仓互相重叠的信号算同一次下注。n_clusters 是有成交的簇数；
+    k 个簇的置换检验最小只能分辨到 1/2^k，所以 p_ge 不会低于它（少于 5 个簇时 p_ge 不可能 <= 0.05）。"""
     spec = spec.reset_index(drop=True)
     arr = _arrays(bars1m)
     lat = pd.Timedelta(minutes=kw.get("latency_min", 0.0))
@@ -267,17 +285,20 @@ def baselines(spec: pd.DataFrame, bars1m: dict, observed_avg_net: float | None =
     mom = np.where(e >= past, 1, -1)
     res = dict(all_long=stat(long_net[ok]), all_short=stat(short_net[ok]),
                mom60=stat(np.where(mom > 0, long_net, short_net)[ok]))
-    cid = _clusters(spec, cluster_minutes)
+    hold_min = (_ns(spec["exit_time"]).asi8 - _ns(spec["entry_time"]).asi8) / 6e10
+    width = max(float(cluster_minutes), float(hold_min.max())) if len(spec) else float(cluster_minutes)
+    cid = _clusters(spec, width)
     rng = np.random.default_rng(seed)
     draws = rng.choice([-1, 1], size=(n_random, cid.max() + 1))[:, cid]          # 每簇一个方向
     nets = np.where(draws > 0, long_net, short_net)[:, ok]
     if nets.shape[1]:
         avg, wr = nets.mean(axis=1), (nets > 0).mean(axis=1)
-        res["random"] = dict(n_clusters=int(cid.max() + 1), avg_net_mean=float(avg.mean()), avg_net_q05=float(np.quantile(avg, .05)),
+        k = int(len(np.unique(cid[ok])))                                          # 有成交的簇数 = 独立的方向选择次数
+        res["random"] = dict(n_clusters=k, cluster_minutes=width, avg_net_mean=float(avg.mean()), avg_net_q05=float(np.quantile(avg, .05)),
                              avg_net_q95=float(np.quantile(avg, .95)), win_rate_mean=float(wr.mean()),
                              win_rate_q95=float(np.quantile(wr, .95)))
         if observed_avg_net is not None:
-            res["random"]["p_ge"] = float((avg >= observed_avg_net - 1e-15).mean())
+            res["random"]["p_ge"] = max(float((avg >= observed_avg_net - 1e-15).mean()), 0.5 ** k)
     return res
 
 
