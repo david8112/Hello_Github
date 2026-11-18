@@ -7,6 +7,10 @@
 
 输出 JSON（同时写到 --out）：signals/trades 数量、causality（截断重跑检查）、one_position 和 all_signals 两种口径的
 summary / block / baselines，以及两个压力口径：多等 15 分钟再进场（late15）、费用加倍（cost2x）。时间都是 UTC。
+
+偷看检查（causality）：在 --cuts 个进场时刻（默认 12；--cuts 0 = 每个进场时刻）把数据集物理截断（Dataset.cut）、重新加载
+策略文件再跑一遍，截断时刻及之前的信号必须和完整数据上的一模一样，也不能发出晚于截断时刻的信号；策略在截断数据上报错
+也记为一次违规。最终要采用的规则建议用 --cuts 0 再查一遍。--set 只能改 PARAMS 里已有的参数，类型不对或名字写错直接报错。
 """
 from __future__ import annotations
 
@@ -103,7 +107,9 @@ def causality(mod, ds: Dataset, params: dict, full: pd.DataFrame, n_cuts: int = 
     n_cuts <= 0 表示每个进场时刻都查一遍（慢，但不会漏掉只在个别信号上偷看的情况）。"""
     if not len(full):
         return dict(cuts=0, violations=0, examples=[])
-    times = np.sort(full["entry_time"].unique())
+    times = np.sort(full.loc[full["entry_time"] <= ds.now, "entry_time"].unique())      # 数据结束之后的进场时刻没法截断
+    if not len(times):
+        return dict(cuts=0, violations=0, examples=[])
     k = len(times) if n_cuts <= 0 else min(n_cuts, len(times))
     cuts = pd.DatetimeIndex(times[np.unique(np.linspace(0, len(times) - 1, k).astype(int))])
     bad, examples = 0, []

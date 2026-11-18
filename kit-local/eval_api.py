@@ -11,6 +11,7 @@
     ds.last_price("SOL", t)                       # t 时刻最近一根已收盘 1 分钟线的收盘价（t 默认 now）
     ds.at(t)                                      # 截止时间提前到 t 的视图（t 不能晚于当前视图的 now，否则报错）
     ds.end                                        # 当前视图里最后一根 1 分钟线的收盘时间（不是整份数据的结尾）
+    ds.cut(t)                                     # 同 at(t)，但内部缓存也物理截断（eval_run 的偷看检查用）
 
 策略文件约定（见 strategies/ 下的例子）:
     NAME = "..."; DESCRIPTION = "..."; PARAMS = {...}       # 参数写死在 PARAMS 里

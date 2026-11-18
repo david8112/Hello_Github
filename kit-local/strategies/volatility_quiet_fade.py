@@ -32,14 +32,24 @@ The rule, to trade by hand (all times UTC):
 Controls built in (use --set): quiet=follow turns every trade into the breakout twin on the same brackets (enter WITH the
 touch, stop at P, no target); busy=fade or busy=follow trade the busy regime too; thr=99 removes the regime filter.
 
-Honest status on the design data (46 hours, 7 trades in 4 eight-hour blocks, BTC and SOL usually together): +41.5 bp per trade
-net, 6 of 7 trades won, both sides won; the breakout twin on the same brackets lost 68 bp per trade. This is far too little to
-mean anything (random direction does as well in 18% of draws). The reason it is frozen at all is the bar history of the two
-weeks before the forecasts (15-minute bars 2026-11-04 .. 11-17, no model): with PERFECT knowledge of which 4-hour windows turn
-out quiet, this bracket earned about +16 bp per trade net and lost about 30 bp in the busy windows; without any regime
-knowledge it lost about 5 bp. So everything depends on how well the model's "quiet" call keeps the busy windows out, which 46
-hours cannot show. Expected on unseen data: close to zero, more likely a small plus than a large one; not adoptable before it
-has at least 6 independent blocks.
+Honest status on the design data (46 hours): 8 trades at 5 independent moments (BTC and SOL mostly together), +60.4 bp per
+trade net, 7 of 8 won (7 take-profits, 1 stop), 4 longs and 4 shorts; the breakout twin on the same brackets lost 87 bp per
+trade. Do not read this as an edge of that size:
+ (a) the same brackets sized from the past day's realised volatility instead of the model, with no regime filter, earned
+     +43.8 bp at the same moments: the model's contribution is not visible on this data;
+ (b) the regime filter removed a single forecast batch (2026-11-16 13:59), and fading it would have won (9 trades, +73 bp
+     without the filter);
+ (c) the same model-free bracket started at every full hour instead of at the forecast moments LOST 30 bp per trade over the
+     same days: the design result depends on which moments happened to be chosen;
+ (d) a half-sigma bracket (k = 0.5) loses (-9.6 bp per trade): the target must be large against the 13 bp round-trip cost.
+     k = 0.6, 0.9, 1.0 and the neighbours of every other parameter keep the sign.
+The reason it is frozen at all is the bar history before the forecasts (15-minute bars 2026-11-04 .. 11-15, no model, entry
+at the trigger price): with PERFECT knowledge of which 4-hour windows turn out quiet this bracket earned +16.7 bp per trade net
+(84 trades, 65% wins) and lost 29.7 bp in the windows that turned out busy; with no regime knowledge it lost 4.2 bp. With a
+volatility forecast of the model's rank skill (about 0.5 to 0.6) the same history gives about +3 to +5 bp per trade and 56-57%
+wins. So everything depends on how well the model's "quiet" call keeps the busy windows out, which 46 hours cannot show.
+Expected on unseen data: a few bp per trade at best, statistically zero on the amount of data available; not adoptable
+before it has at least 6 independent blocks. Take-profit or stop can end a trade in less than 30 minutes (2 of 8 on design).
 """
 import numpy as np
 import pandas as pd
